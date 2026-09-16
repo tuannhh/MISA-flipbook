@@ -203,8 +203,79 @@ Backend bổ sung cho luồng "Upload → job → preview → publish → reader
   đủ 6 file migration, luồng upload→publish→đọc công khai hoạt động qua cả API thô lẫn UI thật
   trong trình duyệt.
 
+**Bổ sung sau khi P2 đã "xong theo gate" — hiệu ứng lật trang 3D thật (không phải
+slideshow/crossfade cũ)**, làm theo yêu cầu người dùng "làm hiệu ứng lật trang 3D",
+tham khảo tương tác (không sao chép code) từ heyzine.com/flip-book/17a2725140.html#page/5:
+
+- `apps/web/src/components/FlipBook.tsx` (mới) thay hoàn toàn phần render ảnh tĩnh trong
+  `apps/web/src/app/read/[permalink]/page.tsx`. Tự dựng bằng CSS 3D transform thuần
+  (`rotateY` + `backface-visibility` + `perspective`), KHÔNG dùng thư viện ngoài
+  (turn.js/react-pageflip) để tránh phụ thuộc license ngoài tầm kiểm soát — giữ tinh
+  thần đã chọn ở P0 (từ chối PyMuPDF vì AGPL).
+- Mô hình vật lý (ghi lại trong comment đầu file để không phải suy luận lại):
+  - Mobile/1-trang: mỗi trang là 1 lá bản lề cạnh TRÁI cố định, lật tới `rotateY 0→-180`,
+    lật lùi `rotateY 0→+180` (giống lịch bàn/sổ xoay — một ẩn dụ vật lý thật, không phải
+    giả để đơn giản hoá code).
+  - Desktop/2-trang (spread): trang phải lật quanh gáy sách khi lật tới, trang trái lật
+    quanh gáy khi lật lùi — đúng mô hình sách thật; mặt sau của lá lật chính là trang mới
+    xuất hiện ở phía đối diện (không phải ảnh giả lập).
+  - Bìa trước/bìa sau (trang đơn theo PLAN.md mục 4) là trường hợp biên: ĐƠN GIẢN HOÁ CÓ
+    CHỦ ĐÍCH — mặt sau lá lật khi đóng/mở bìa dùng "giấy lót" (gradient trơn, không phải
+    ảnh PDF thật) thay vì compose ảnh hai trang, để tránh hiển thị sai tỷ lệ khi lá chỉ
+    rộng bằng nửa slot nhưng đích lại là trang bìa rộng đầy đủ. Đây là 1 trong 2 điểm
+    hiệu ứng KHÔNG hoàn toàn chính xác vật lý, ghi rõ để không tự nhận "giống hệt sách
+    thật 100%".
+  - Chế độ 1/2 trang: tự động theo bề rộng khung (>=900px → spread, theo PLAN.md mục 4),
+    CÓ nút cho người dùng tự chọn đè lên khi khung >=640px ("tablet có chọn 1/2 trang
+    theo chiều rộng thực tế" — yêu cầu này trước đó CHƯA làm, nay đã có).
+  - `useSimpleReaderMode` (mới, `apps/web/src/lib/useSimpleReaderMode.ts`): tắt hẳn hiệu
+    ứng 3D, chỉ đổi trang tức thì, khi `prefers-reduced-motion: reduce` HOẶC
+    `navigator.deviceMemory<=2` HOẶC `hardwareConcurrency<=2`. **Đây là suy đoán bằng
+    heuristic, KHÔNG phải benchmark đo trên thiết bị yếu thật** — `deviceMemory` chỉ có ở
+    Chromium, `hardwareConcurrency` là proxy thô cho CPU chứ không đo được năng lực GPU
+    compositing. Đường này được xác minh bằng ĐỌC CODE/lần theo logic, KHÔNG bằng giả lập
+    trình duyệt trực tiếp (công cụ trình duyệt dùng để tự kiểm thử không hỗ trợ ép
+    `prefers-reduced-motion` runtime) — nếu cần độ tin cậy cao hơn phải đo trên thiết bị
+    thật, giữ nguyên mục "chưa xác nhận iOS/Android thật" đã ghi ở phần giả định.
+- **Lỗi thật phát hiện và sửa trong lúc tự kiểm thử qua Claude Browser (không phải suy
+  đoán)**: lần lượt bắt gặp 2 lỗi khiến hiệu ứng lật kẹt giữa chừng vĩnh viễn (không bao
+  giờ hoàn tất chuyển trang) khi pane trình duyệt không được vẽ (rAF bị treo vô thời hạn
+  dù `document.hidden===false`, không phát hiện được qua Page Visibility API) — sửa bằng:
+  (1) `nextPaint()` (rAF + `setTimeout` dự phòng thay vì rAF đơn thuần) cho bước "tạo lá ở
+  progress 0 rồi mới bật transition"; (2) một `useEffect` an toàn: nếu quá
+  `durationMs + 150ms` mà `transitionend` chưa tự dọn dẹp flight, tự ép hoàn tất/huỷ. Đây
+  không phải rủi ro giả định — đã tái hiện được lỗi kẹt thật (spread lùi từ trang cuối bị
+  đứng hình vô thời hạn), sửa, rồi xác nhận lại chạy đúng qua cùng kịch bản.
+- **Đã tự kiểm thử thật qua Claude Browser (không phải mô tả suy diễn)**, trên
+  `sach-demo-p2-tieng-viet` (5 trang, có bìa+2 spread) và một sách 150 trang tự tạo/publish
+  tạm qua API thật (`tests/fixtures/pdf/sample_stress_150pages.pdf`, đã xoá dữ liệu test
+  sau khi xong để không để lại rác trong DB dev):
+  - Desktop 1280px: lật tới/lùi qua nút bấm VÀ qua kéo chuột (pointer drag) đều đúng, cả
+    hướng tới lẫn lùi, cho cặp trang nội bộ (vd 2-3 ↔ 4-5) lẫn ranh giới mở/đóng bìa
+    trước (1 ↔ 2-3).
+  - Kéo dở dang <50% rồi thả: tự huỷ, quay lại đúng trang cũ (không commit nhầm).
+  - Mobile giả lập 375×812: lật từng trang một (không ghép cặp), kéo vuốt hoạt động.
+  - Nút "1 trang"/"2 trang" ép chế độ hoạt động đúng trên desktop.
+  - Phím mũi tên trái/phải hoạt động.
+  - Dữ liệu thật 150 trang: xác nhận `computeSpreads` cho đúng bìa trước (trang 1, đơn),
+    spread áp chót (148-149, cặp), bìa sau (trang 150, đơn) — đúng dự kiến khi tổng số
+    trang sau bìa là số lẻ.
+  - **Giới hạn thật của lần tự kiểm thử này**: KHÔNG click hết tới tận trang 150 để xem
+    trực tiếp hoạt cảnh "đóng/mở bìa sau" bằng mắt (mỗi lần lật chỉ ăn 1 lần bấm do có
+    guard chặn spam trong lúc đang animate — click nhanh 74 lần để tới cuối sẽ tốn quá
+    nhiều lượt gọi công cụ). Nhánh "đóng/mở bìa sau" trong code ĐỐI XỨNG với nhánh "mở/đóng
+    bìa trước" đã xác nhận chạy đúng trên sách 5 trang, và đã xác nhận dữ liệu (bước trên)
+    đúng hình dạng để nhánh đó được gọi tới — nhưng đây là suy luận đối xứng + kiểm chứng
+    dữ liệu, KHÔNG phải đã tận mắt xem hoạt cảnh đó chạy trên trình duyệt. Ghi rõ để không
+    tự nhận "đã test hết mọi trường hợp".
+  - Chưa giả lập được `prefers-reduced-motion` qua công cụ trình duyệt đang dùng (không hỗ
+    trợ ép media feature này khi mở tab thường) nên đường "chế độ đơn giản" chỉ được xác
+    nhận qua đọc code, như đã ghi ở trên.
+  - Sau khi build lại xong, đã CHỦ ĐỘNG chạy lại `tenant_isolation.test.js` (13/13),
+    `api_e2e.test.js` (14/14), `p2_e2e.test.js` (16/16) trên đúng stack Docker đang chạy —
+    không hồi quy (thay đổi lần này chỉ ở `apps/web`, không đụng API/DB/worker).
+
 Chưa xong trong P2 (không được coi là hoàn tất, ghi rõ để không tự nhận):
-- Hiệu ứng lật trang 3D (flip animation) như Heyzine — hiện là slideshow/crossfade.
 - Mật khẩu bảo vệ sách công khai (`book_settings.password_hash` đã có cột nhưng chưa có luồng
   nhập mật khẩu ở reader) — public reader hiện CHẶN HẲN (403) nếu Creator bật mật khẩu, thay vì
   cho qua sai — an toàn nhưng chưa đúng chức năng, để dành cho P3 theo ROADMAP.md.
@@ -214,6 +285,12 @@ Chưa xong trong P2 (không được coi là hoàn tất, ghi rõ để không t
 - Reconciler DB (job 'processing' quá hạn quay lại 'queued') mới kiểm chứng qua đọc code + suy
   luận từ test BullMQ-stalled ở trên, CHƯA có test tự động giả lập đúng kịch bản
   STUCK_JOB_TIMEOUT_MINUTES thật (15 phút, quá lâu để chạy trong CI).
+- Trong hiệu ứng lật trang mới: chưa có test tự động (Playwright/Cypress...) cho FE, mới chỉ
+  tự kiểm thử thủ công qua trình duyệt (xem ghi chú chi tiết ở trên); chưa test trên thiết bị
+  chạm thật (chỉ giả lập kích thước 375×812 qua DevTools-style emulation, chưa test iOS/Android
+  thật như ghi ở phần giả định); ?page=N deep-link (PLAN.md mục 2: "Trang đọc dùng ?page=5")
+  vẫn CHƯA làm — không nằm trong yêu cầu lần này (chỉ làm hiệu ứng lật trang) nên không tự ý
+  mở rộng phạm vi, ghi lại để không quên.
 
 Chưa bắt đầu: P3-P6, Git tag bản stable.
 Điểm stable gần nhất: chưa có (P1+P2 xong nhưng chưa cắt tag).
@@ -221,7 +298,8 @@ Handoff tài liệu: PLANNING-001 (draft); không coi là phần mềm có thể
 Bước tiếp theo: P3 theo ROADMAP.md (mật khẩu, download, replace/revision, embed, link share) —
 book_settings.password_hash đã có cột sẵn từ P1, cần thêm luồng nhập mật khẩu ở FE + kiểm tra ở
 `public_get_book`/`public_get_page_asset`; hoặc đóng các mục "chưa xong trong P2" ở trên nếu
-người dùng muốn cứng hoá P2 trước khi sang P3.
+người dùng muốn cứng hoá P2 trước khi sang P3. Test tự động cho FE (Playwright) đáng cân nhắc
+trước khi làm thêm tương tác phức tạp hơn (P4: hyperlink overlay, media).
 
 ## Cách cập nhật
 Sau mỗi đợt công việc, ghi: đã đổi gì, quyết định/giả định mới, test nào thực sự chạy, kết quả/lỗi, commit và bước kế tiếp.

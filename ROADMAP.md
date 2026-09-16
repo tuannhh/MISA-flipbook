@@ -28,8 +28,12 @@ Theo chỉ đạo người dùng: ưu tiên bản chạy Docker; DevOps tự siz
   375×812) và "restart worker không làm hỏng publish" (tách `dispatcher`/`worker-convert` thành
   2 service độc lập; kill `worker-convert` bằng SIGKILL giữa lúc xử lý job 150 trang, hệ thống
   còn lại không bị ảnh hưởng, job tự phục hồi qua BullMQ stalled-job detection sau khi worker
-  sống lại, hoàn tất đúng). Chi tiết đầy đủ + giới hạn còn mở (chưa có hiệu ứng lật trang 3D,
-  chưa có mật khẩu bảo vệ, chưa có trang Admin trên FE) ở MEMORYBANK.md.
+  sống lại, hoàn tất đúng). Sau đó đã bổ sung hiệu ứng lật trang 3D thật (CSS 3D transform,
+  không phải slideshow/crossfade) theo yêu cầu người dùng, tự kiểm thử qua trình duyệt thật
+  (desktop kéo/click/phím, mobile giả lập vuốt, chế độ 1/2 trang) — chi tiết, giới hạn còn
+  mở (đơn giản hoá mặt sau lá lật ở bìa, chế độ đơn giản cho máy yếu chỉ xác nhận qua đọc
+  code) ở MEMORYBANK.md. Giới hạn còn mở khác: chưa có mật khẩu bảo vệ, chưa có trang Admin
+  trên FE, chưa có test tự động (Playwright) cho FE.
 
 P6 có thể khảo sát từ P0, nhưng không khóa tiến độ đọc sách vào thời gian Meta/LinkedIn xét duyệt. Mốc v1.0-core đạt P5 phải ghi rõ social trực tiếp chưa hoàn tất nếu P6 còn mở; không ghi toàn bộ yêu cầu đã xong.
 
