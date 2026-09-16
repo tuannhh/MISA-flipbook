@@ -359,9 +359,12 @@ tham chiếu ngắn ở ROADMAP.md mục Backlog:
   **đã hỏi lại và người dùng làm rõ (17/09/2026)**: giống "chỉ mình tôi" của Facebook,
   "Private" của YouTube, "Restricted" của Google Drive — Creator khóa lại link ĐÃ publish,
   cùng permalink đó chặn người xem ẩn danh (403) nhưng chủ sở hữu vẫn xem được qua chính
-  link đó khi đăng nhập; chuyển qua lại được, link không đổi. Chi tiết đầy đủ + việc cần
-  làm rõ thêm (Admin có xem được sách Private của người khác không; thứ tự ưu tiên nếu
-  vừa Private vừa có mật khẩu F05) ở PLAN.md mục 8.
+  link đó khi đăng nhập; chuyển qua lại được, link không đổi. **Đã chốt thêm 2 điểm
+  (17/09/2026)**: Admin (system admin) LUÔN xem được sách Private của người khác, mỗi
+  lần xem phải ghi `audit_logs` (không có ngoại lệ tuyệt đối); nếu vừa Private vừa có
+  mật khẩu F05 thì Private ưu tiên cao nhất — chỉ owner/Admin xem được, mật khẩu vô hiệu
+  lực trong lúc Private đang bật. Đã đủ rõ để thiết kế/ước lượng khi vào lịch, chi tiết
+  đầy đủ ở PLAN.md mục 8.
 - F17: tham khảo props/events/slot của `ts1/flipbook-vue` (MIT, đã tra license) để bổ
   sung zoom in/out cho reader hiện tại (`apps/web/src/components/FlipBook.tsx`, đang
   dùng `react-pageflip`) — KHÔNG chuyển sang flipbook-vue (khác framework, xem ADR
@@ -373,9 +376,9 @@ Handoff tài liệu: PLANNING-001 (draft); không coi là phần mềm có thể
 Bước tiếp theo: P3 theo ROADMAP.md (mật khẩu, download, replace/revision, embed, link share) —
 book_settings.password_hash đã có cột sẵn từ P1, cần thêm luồng nhập mật khẩu ở FE + kiểm tra ở
 `public_get_book`/`public_get_page_asset`; hoặc đóng các mục "chưa xong trong P2" ở trên nếu
-người dùng muốn cứng hoá P2 trước khi sang P3. F16 đã được làm rõ ý (xem PLAN.md mục 8)
-nhưng còn 2 câu hỏi mở nhỏ (Admin xem sách Private của người khác; ưu tiên Private vs mật
-khẩu) nên hỏi nốt trước khi code. Test tự động cho FE (Playwright) đáng cân nhắc trước khi
+người dùng muốn cứng hoá P2 trước khi sang P3. F16 đã chốt đủ rõ để code khi vào lịch
+(xem PLAN.md mục 8: Admin luôn xem được sách Private + ghi audit; Private ưu tiên cao
+hơn mật khẩu F05). Test tự động cho FE (Playwright) đáng cân nhắc trước khi
 làm thêm tương tác phức tạp hơn (P4: hyperlink overlay, media, hoặc F17 zoom).
 
 ## Cách cập nhật
