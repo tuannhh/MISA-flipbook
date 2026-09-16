@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  docker-stack-integration:
+    name: Docker cold start + integration tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Write CI .env for docker compose
+        working-directory: infra/docker
+        run: |
+          cat > .env <<'EOF'
+          POSTGRES_USER=misa_admin
+          POSTGRES_PASSWORD=ci_pg_password_${{ github.run_id }}
+          POSTGRES_DB=misa_flipbook
+          APP_DB_PASSWORD=ci_app_password_${{ github.run_id }}
+          JWT_SECRET=ci_jwt_secret_please_ignore_${{ github.run_id }}
+          JWT_EXPIRES_IN_SECONDS=28800
+          INTERNAL_API_TOKEN=ci_internal_token_${{ github.run_id }}
+          PDF_MAX_BYTES=209715200
+          PDF_PIPELINE_VERSION=v1
+          DISPATCHER_POLL_INTERVAL_MS=1000
+          DISPATCHER_CONCURRENCY=2
+          EOF
+
+      - name: Build and start full stack (cold start, no pre-existing volumes)
+        working-directory: infra/docker
+        run: docker compose up -d --build --wait --wait-timeout 180
+
+      - name: Show container status
+        if: always()
+        working-directory: infra/docker
+        run: docker compose ps
+
+      - name: Seed first system admin
+        working-directory: apps/api
+        env:
+          DATABASE_URL: postgres://misa_admin:ci_pg_password_${{ github.run_id }}@127.0.0.1:5432/misa_flipbook
+          SEED_ADMIN_EMAIL: admin@misa.local
+          SEED_ADMIN_PASSWORD: ChangeThisAdminPw123!
+        run: |
+          npm ci
+          npx ts-node --transpile-only scripts/seed-admin.ts
+
+      - name: Install tenant_isolation.test.js deps
+        working-directory: tests/integration
+        run: npm ci
+
+      - name: Run DB-level tenant isolation tests (RLS)
+        working-directory: tests/integration
+        env:
+          DATABASE_URL: postgres://misa_admin:ci_pg_password_${{ github.run_id }}@127.0.0.1:5432/misa_flipbook
+          APP_USER_URL: postgres://app_user:ci_app_password_${{ github.run_id }}@127.0.0.1:5432/misa_flipbook
+        run: node tenant_isolation.test.js
+
+      - name: Run HTTP-level API e2e tests
+        working-directory: tests/integration
+        env:
+          API_BASE_URL: http://127.0.0.1:3000
+          ADMIN_EMAIL: admin@misa.local
+          ADMIN_PASSWORD: ChangeThisAdminPw123!
+        run: node api_e2e.test.js
+
+      - name: Dump logs on failure
+        if: failure()
+        working-directory: infra/docker
+        run: docker compose logs --tail 200
+
+      - name: Tear down stack
+        if: always()
+        working-directory: infra/docker
+        run: docker compose down -v

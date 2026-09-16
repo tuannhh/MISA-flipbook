@@ -65,9 +65,9 @@ Chưa xong trong P0 (không được coi là hoàn tất): PoC audio/video (thi�
 internal link ra số trang cụ thể, đo trên thiết bị mobile thật, PDF scan ảnh bitmap thật,
 PDF dung lượng lớn thật (gần 200 MB), review license bundle nhị phân PDFium khi đóng Docker image.
 
-**P1 giai đoạn 1 (schema + cách ly tenant) — hoàn tất và có bằng chứng chạy thật**:
-- Docker Compose (infra/docker) chạy Postgres 16.4 + Redis 7.4 thật, có healthcheck; đã thử
-  cold start sạch (`docker compose down -v && up -d`) thành công, healthy trong ~9 giây.
+**P1 — hoàn tất, có bằng chứng chạy thật trên Docker cold start (không phải mockup)**:
+
+Giai đoạn 1 (schema + cách ly tenant):
 - Schema Postgres đầy đủ theo ARCHITECTURE.md mục 3 (infra/migrations/0002_core_schema.sql):
   tenants/users/memberships/books/revisions/book_settings/assets/jobs/audit_logs/
   analytics_events/daily_stats, khóa ngoại ghép tenant_id để chặn liên kết chéo tenant.
@@ -75,26 +75,70 @@ PDF dung lượng lớn thật (gần 200 MB), review license bundle nhị phân
   BYPASSRLS; mọi bảng có dữ liệu tenant đều FORCE ROW LEVEL SECURITY. **Sửa 1 lỗi thiết kế phát
   hiện khi viết test**: policy ban đầu cho đọc theo toàn tenant, vi phạm PLAN.md mục 3 ("Creator
   khác dù cùng tenant chỉ xem qua link như Viewer") — đã sửa thành owner-scoped (Creator chỉ thấy
-  sách/revision/asset/job/thống kê CỦA CHÍNH MÌNH, không phải toàn tenant); Admin bypass riêng.
-- Migration runner (infra/migrations/run.js) tự tạo/đồng bộ role `app_user`, idempotent (test
-  chạy 2 lần liên tiếp không lỗi).
-- **Test tích hợp thật trên Postgres thật** (tests/integration/tenant_isolation.test.js):
-  13/13 assertion PASS, chạy lặp lại 2 lần đều pass. Kiểm chứng: Creator A chỉ thấy sách của
-  mình (kể cả cùng tenant với Creator khác); không đọc/sửa được sách tenant khác; INSERT giả
-  mạo tenant_id/owner_id bị RLS từ chối bằng lỗi rõ ràng (không âm thầm 0 dòng); Admin đọc được
-  xuyên tenant; session chưa xác thực không thấy gì. Đây chính là điều kiện đi tiếp của P1 trong
-  ROADMAP.md.
+  sách/revision/asset/job/thống kê CỦA CHÍNH MÌNH, không phải toàn tenant) qua helper
+  `is_own_book()` SECURITY DEFINER; Admin bypass riêng bằng `app.is_system_admin`.
+- **Sửa 1 lỗi thiết kế thứ 2 phát hiện khi làm API** (infra/migrations/0005_self_membership_policies.sql):
+  policy cũ của memberships/tenants đòi hỏi `app.tenant_id` đã được SET trước, nhưng luồng đăng
+  nhập theo PLAN.md ("chọn tenant sau đăng nhập") cần liệt kê TẤT CẢ tenant của user TRƯỚC khi
+  chọn — đã thêm policy self-scoped theo `app.user_id`, không cần tenant_id.
+- Migration runner (infra/migrations/run.js) tự tạo/đồng bộ role `app_user`, idempotent.
 
-Chưa xong trong P1 (không được coi là hoàn tất): API NestJS thật (auth JWT, endpoints, middleware
-gắn `SET LOCAL app.*` mỗi transaction), storage adapter local/S3, dispatcher/outbox, CI, Dockerfile
-cho api/dispatcher/pdf-worker/web/proxy (docker-compose hiện chỉ có postgres+redis), test tải/pool
-connection dưới concurrency thật.
+Giai đoạn 2 (API + pipeline convert thật, chạy full trên Docker):
+- NestJS API thật (apps/api): JWT login (argon2id, có dummy-hash chống timing attack khi email
+  không tồn tại), interceptor `DbContextInterceptor` mở transaction Postgres mỗi request, SET
+  LOCAL app.user_id/app.tenant_id/app.is_system_admin đúng theo context đã kiểm chứng ở RLS trên
+  — tức là tầng ứng dụng dùng ĐÚNG cơ chế cách ly đã test, không phải một lớp auth riêng biệt.
+  Endpoint: /auth/login, /me, /admin/* (tạo tenant/user/membership), /books (list/create/upload),
+  /jobs/:id, /health.
+- Outbox pattern thật: upload PDF hợp lệ (kiểm chữ ký `%PDF-`, SHA-256, giới hạn kích thước) tạo
+  revision + asset(source_pdf) + jobs row (idempotency_key theo revision+pipeline_version) trong
+  cùng transaction Postgres — không có job nào "mất tích" nếu app crash giữa chừng.
+- Dispatcher thật (apps/dispatcher): claim job bằng `SELECT ... FOR UPDATE SKIP LOCKED` (an toàn
+  chạy nhiều instance song song), đẩy vào BullMQ/Redis để retry có backoff, tự phục hồi job kẹt ở
+  'processing' quá hạn (reconcileStuckJobs). Gọi pdf-worker qua HTTP nội bộ có shared-secret
+  (`x-internal-token`), ghi kết quả (manifest/page_image/thumbnail asset rows, revision.state,
+  job.state) trong transaction admin riêng.
+- pdf-worker thật (services/pdf-worker, FastAPI + pypdfium2 + pypdf): render trang, trích link,
+  chuẩn hoá toạ độ theo rotation, viết manifest.json. Có path-traversal guard trên STORAGE_ROOT.
+- **Toàn bộ 5 service (postgres, redis, migrate, api, dispatcher, pdf-worker) đã build và chạy
+  bằng `docker compose up --build` trong infra/docker/docker-compose.yml**, xác nhận 2 lần:
+  (1) cold start với volume Postgres còn dữ liệu cũ, (2) cold start THẬT SỰ TỪ RỖNG
+  (`docker compose down -v` xoá hết volume rồi `up` lại) — cả 2 lần container lên healthy, migrate
+  chạy đủ 5 file migration, seed admin thành công, và một PDF upload thật đi hết pipeline tới
+  job.state='done'/revision.state='ready' với đủ asset (source_pdf, manifest, 5 page_image,
+  5 thumbnail). Không có port nào của dispatcher/pdf-worker lộ ra ngoài host — chỉ api (3000) và
+  postgres/redis (5432/6379, chỉ bind 127.0.0.1) publish port.
+- Resource limit (`deploy.resources.limits` trong docker-compose.yml) đã xác minh bằng
+  `docker inspect` áp dụng thật: api 1 CPU/512MB, pdf-worker 1 CPU/1GB, dispatcher 0.5 CPU/256MB.
+- **Cả 2 bộ test tích hợp PASS 100% trên stack Docker cold-start-từ-rỗng** (không phải host dev
+  process, không phải mock):
+  - tests/integration/tenant_isolation.test.js — 13/13 PASS (DB-level, raw pg qua app_user).
+  - tests/integration/api_e2e.test.js — 14/14 PASS (HTTP-level qua API thật: login, /me, tạo
+    sách F02 slug, chặn cross-tenant 403/404, chặn thiếu x-tenant-id, chặn PDF giả chữ ký, upload
+    PDF thật → job queued → done).
+- CI (.github/workflows/ci.yml): dựng lại đúng docker-compose.yml này trên GitHub Actions
+  (`docker compose up -d --build --wait`), seed admin, chạy cả 2 bộ test tích hợp, dump log khi
+  fail, luôn `down -v` để dọn.
 
-Chưa bắt đầu: P2-P6, backup/restore thật, Git tag.
-Điểm stable gần nhất: chưa có.
+**Đã CHỦ ĐỘNG bỏ phạm vi khỏi P1 (quyết định minh bạch, không phải quên)**:
+- apps/web (Next.js reader/dashboard) và reverse proxy (nginx) — ARCHITECTURE.md mục 8 liệt kê
+  trong "Docker Compose pilot" nhưng điều kiện gate của ROADMAP.md cho P1 chỉ yêu cầu "cold start
+  Docker được" ở tầng dữ liệu + API + pipeline, chưa cần UI. Dời sang P2/P3 khi có FE thật.
+- Mạng Docker `internal: true` cho pdf-worker (cô lập hẳn khỏi internet) — hiện chỉ dừng ở mức
+  không publish port ra host; container vẫn có thể ra internet qua bridge network mặc định. Rủi ro
+  thấp (pdf-worker không có endpoint public, chỉ nhận từ dispatcher cùng mạng) nhưng CHƯA đóng
+  hoàn toàn theo ARCHITECTURE.md.
+- Font-embedding: pdf-worker container chưa cài font hệ thống bổ sung (fonts-noto/fonts-liberation);
+  PDF không nhúng font thật (chưa có corpus thật) chưa được kiểm chứng render đúng trong container.
+- Test tải/pool connection dưới concurrency thật (nhiều upload đồng thời, nhiều dispatcher
+  instance) — chưa đo; hiện chỉ xác nhận đúng (correctness), chưa xác nhận hiệu năng dưới tải.
+- Backup/restore Postgres thật — chưa thử, vẫn ghi nhận mục tiêu RPO 24h/RTO 4h ở phần giả định.
+
+Chưa bắt đầu: P2-P6, Git tag bản stable.
+Điểm stable gần nhất: chưa có (P1 xong nhưng chưa cắt tag).
 Handoff tài liệu: PLANNING-001 (draft); không coi là phần mềm có thể rollback.
-Bước tiếp theo: dựng NestJS API (auth, tenant middleware dùng đúng context Postgres đã kiểm
-chứng ở trên), storage adapter, rồi Dockerize toàn bộ services còn lại.
+Bước tiếp theo: bắt đầu P2 theo ROADMAP.md (khả năng cao là apps/web — reader/dashboard), hoặc
+đóng các mục "chủ động bỏ phạm vi" ở trên nếu người dùng muốn cứng hoá P1 trước khi sang P2.
 
 ## Cách cập nhật
 Sau mỗi đợt công việc, ghi: đã đổi gì, quyết định/giả định mới, test nào thực sự chạy, kết quả/lỗi, commit và bước kế tiếp.

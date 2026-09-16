@@ -1,0 +1,5 @@
+.local-storage
+poc/output
+poc/*.json
+__pycache__
+*.pyc

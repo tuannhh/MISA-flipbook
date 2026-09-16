@@ -14,6 +14,16 @@
 
 Theo chỉ đạo người dùng: ưu tiên bản chạy Docker; DevOps tự sizing server MISA về sau. P5 có thể nghiệm thu Docker và bàn giao runbook trước, phần cutover server chỉ thực hiện khi DevOps sẵn sàng.
 
+**Trạng thái P0/P1 (chi tiết đầy đủ + bằng chứng ở MEMORYBANK.md, mục "Tiến độ thực tế")**:
+- P0: hoàn tất giai đoạn PoC render/extract PDF (pypdfium2 + pypdf), một số case (audio/video,
+  scan thật, mobile thật) còn mở, không chặn P1.
+- P1: **điều kiện đi tiếp đã đạt và kiểm chứng thật** — "Hai tenant và hai Creator không đọc/sửa
+  dữ liệu quản trị của nhau" (13/13 + 14/14 test PASS, kể cả sửa 2 lỗi RLS phát hiện qua test) và
+  "cold start Docker được" (toàn bộ 6 service postgres/redis/migrate/api/dispatcher/pdf-worker
+  cold start từ volume rỗng thành công qua `docker compose up --build`, pipeline PDF thật chạy
+  hết tới trạng thái done/ready). apps/web và reverse proxy chủ động dời sang P2/P3 (không nằm
+  trong điều kiện đi tiếp của P1 theo bảng trên).
+
 P6 có thể khảo sát từ P0, nhưng không khóa tiến độ đọc sách vào thời gian Meta/LinkedIn xét duyệt. Mốc v1.0-core đạt P5 phải ghi rõ social trực tiếp chưa hoàn tất nếu P6 còn mở; không ghi toàn bộ yêu cầu đã xong.
 
 ## Backlog ưu tiên

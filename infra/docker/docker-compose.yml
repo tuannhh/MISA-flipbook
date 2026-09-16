@@ -1,13 +1,13 @@
 name: misa-flipbook
 
-# Giai doan P1: chi postgres + redis, du de chay migration va test cach ly tenant.
-# api/dispatcher/pdf-worker/web/proxy se duoc them khi co Dockerfile that (khong tao
-# service tro toi Dockerfile chua ton tai).
+# P1: postgres, redis, migrate (one-shot), api, dispatcher, pdf-worker.
+# CHUA co: proxy (nginx) va apps/web (Next.js) - chua co UI/reader de phuc vu, se
+# them o P2/P3 khi co gi do that su can proxy. Ghi ro trong MEMORYBANK.md, khong
+# tu nhan da xong toan bo "Docker Compose pilot" cua ARCHITECTURE.md muc 8.
 #
-# DB/Redis KHONG expose ra ngoai may host trong cau hinh muc tieu (ARCHITECTURE.md
-# muc 8: "Chi proxy mo cong public; DB/Redis/worker dung mang noi bo"). Cong duoc mo
-# o day (127.0.0.1 only) chi de phuc vu dev/test cuc bo tren Docker; khi co proxy that
-# se go bo phan "ports" nay.
+# Chi postgres/redis mo port ra 127.0.0.1 de dev/test cuc bo; api mo port de goi
+# thu (chua co proxy). dispatcher/pdf-worker KHONG mo port ra host - chi goi duoc
+# tu trong mang cua compose (ARCHITECTURE.md: "DB/Redis/worker dung mang noi bo").
 
 services:
   postgres:
@@ -41,6 +41,100 @@ services:
       timeout: 5s
       retries: 10
 
+  migrate:
+    build:
+      context: ../migrations
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-misa_admin}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-misa_flipbook}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?can dat APP_DB_PASSWORD trong .env}
+
+  api:
+    build:
+      context: ../../apps/api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgres://app_user:${APP_DB_PASSWORD}@postgres:5432/${POSTGRES_DB:-misa_flipbook}
+      JWT_SECRET: ${JWT_SECRET:?can dat JWT_SECRET trong .env}
+      JWT_EXPIRES_IN_SECONDS: ${JWT_EXPIRES_IN_SECONDS:-28800}
+      STORAGE_ROOT: /data/storage
+      PDF_MAX_BYTES: ${PDF_MAX_BYTES:-209715200}
+      PDF_PIPELINE_VERSION: ${PDF_PIPELINE_VERSION:-v1}
+      PORT: "3000"
+    volumes:
+      - storage_data:/data/storage
+    ports:
+      - "127.0.0.1:3000:3000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 512M
+
+  pdf-worker:
+    build:
+      context: ../../services/pdf-worker
+    restart: unless-stopped
+    environment:
+      STORAGE_ROOT: /data/storage
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?can dat INTERNAL_API_TOKEN trong .env}
+    volumes:
+      - storage_data:/data/storage
+    # KHONG publish port ra host - chi dispatcher (cung mang compose) goi duoc.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/internal/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 1G
+
+  dispatcher:
+    build:
+      context: ../../apps/dispatcher
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      pdf-worker:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://app_user:${APP_DB_PASSWORD}@postgres:5432/${POSTGRES_DB:-misa_flipbook}
+      REDIS_URL: redis://redis:6379
+      PDF_WORKER_URL: http://pdf-worker:8000
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN}
+      STORAGE_ROOT: /data/storage
+      POLL_INTERVAL_MS: ${DISPATCHER_POLL_INTERVAL_MS:-2000}
+      CONCURRENCY: ${DISPATCHER_CONCURRENCY:-2}
+    volumes:
+      - storage_data:/data/storage
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+
 volumes:
   pgdata:
   redisdata:
+  storage_data:

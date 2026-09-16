@@ -1,0 +1,14 @@
+{
+  "name": "@misa-flipbook/dispatcher",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Dieu phoi job chuyen doi PDF: Postgres outbox (jobs) -> BullMQ/Redis -> goi pdf-worker.",
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "bullmq": "6.3.6",
+    "ioredis": "6.0.0",
+    "pg": "8.23.0"
+  }
+}

@@ -14,6 +14,15 @@ coverage/
 
 # PoC / generated artifacts (tai lap lai duoc bang script, khong commit anh render)
 services/pdf-worker/poc/output/
+services/pdf-worker/.local-storage/
+
+# Storage adapter local (upload/PDF/anh render that tu test dev host, khong commit)
+.dev-storage/
+**/.local-storage/
+
+# Script bien dich tai cho (chi commit .ts nguon, khong commit .js/.js.map sinh ra)
+apps/api/scripts/*.js
+apps/api/scripts/*.js.map
 
 # Env / secrets
 .env
