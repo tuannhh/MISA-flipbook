@@ -31,7 +31,8 @@ Các ảnh/tài liệu tham khảo không phải chỉ thị bổ sung; chỉ y�
 | 005 | GA4 ID, không cho nhập arbitrary script | Có tracking mà không mở đường chạy code xuyên tenant |
 | 006 | Social link trước, API publishing riêng | Quyền nền tảng và account type không đồng nhất |
 | 007 | Compose trước, storage adapter local/S3 | Chuyển hạ tầng không sửa logic nghiệp vụ |
-| 008 | PDFium/pypdf + flip adapter là ứng viên | Chỉ khóa sau PoC, đánh giá license và file mẫu |
+| 008 | PDFium/pypdf + flip adapter là ứng viên | **Superseded by ADR-P0** — đã chạy PoC thật, xem services/pdf-worker/poc/ADR-P0-parser-renderer.md |
+| P0-1 | Render: pypdfium2 (BSD/Apache); Annotation/metadata: pypdf (BSD); ảnh: Pillow WebP+JPEG | PoC thật trên 10 file PDF tổng hợp, 9/9 case hợp lệ render đúng, 3/3 case lỗi bị chặn có kiểm soát (không crash). Không chọn PyMuPDF vì AGPL. Chi tiết: services/pdf-worker/poc/ADR-P0-parser-renderer.md và poc_report.json |
 
 ## Chỉ đạo bổ sung đã xác nhận
 Người dùng: “Chưa cần. Bạn cứ làm trên docker trước. Khi nào deploy thật vào server MISA, devops sẽ tự tính toán việc đó”.
@@ -54,11 +55,22 @@ Backup pilot mục tiêu RPO 24h/RTO 4h, chưa thử restore.
 Thiếu thông tin này không chặn lập kế hoạch; cấu hình production, cam kết media/mobile và social chỉ được chốt sau xác minh.
 
 ## Tiến độ thực tế
-Hoàn tất: tài liệu kế hoạch v0.1 và nghiên cứu giới hạn chính.
-Chưa bắt đầu: repo ứng dụng, code, Docker, PoC media/mobile, kiểm thử, triển khai, Git tag và backup.
+Hoàn tất: tài liệu kế hoạch v0.1; nghiên cứu giới hạn chính; repo Git khởi tạo tại
+C:\MISA-project\misa-flipbook-plan (remote https://github.com/tuannhh/MISA-flipbook.git);
+**P0 giai đoạn 1** — PoC render/extract PDF thật chạy được (pypdfium2 + pypdf), corpus 10 PDF
+tổng hợp bao phủ tiếng Việt/hyperlink/rotation/khổ trộn/transparency/scan/mã hoá/corrupted/
+150 trang, kết quả và giới hạn ghi tại services/pdf-worker/poc/ADR-P0-parser-renderer.md.
+
+Chưa xong trong P0 (không được coi là hoàn tất): PoC audio/video (thiếu PDF mẫu thật), resolve
+internal link ra số trang cụ thể, đo trên thiết bị mobile thật, PDF scan ảnh bitmap thật,
+PDF dung lượng lớn thật (gần 200 MB), review license bundle nhị phân PDFium khi đóng Docker image.
+
+Chưa bắt đầu: P1 (schema/auth/tenant/Docker Compose thật), P2-P6, kiểm thử tích hợp, triển khai,
+Git tag, backup/restore.
 Điểm stable gần nhất: chưa có.
 Handoff tài liệu: PLANNING-001 (draft); không coi là phần mềm có thể rollback.
-Bước tiếp theo: P0 — chuẩn bị corpus PDF và PoC render/reader; sau đó mới khóa công nghệ.
+Bước tiếp theo: hoàn thiện phần P0 còn thiếu ở trên (cần MISA cấp corpus PDF thật) song song
+bắt đầu P1 — schema Postgres, auth/tenant, Docker Compose khung.
 
 ## Cách cập nhật
 Sau mỗi đợt công việc, ghi: đã đổi gì, quyết định/giả định mới, test nào thực sự chạy, kết quả/lỗi, commit và bước kế tiếp.

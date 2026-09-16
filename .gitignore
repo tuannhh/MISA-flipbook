@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Build output
+dist/
+build/
+.next/
+out/
+coverage/
+
+# PoC / generated artifacts (tai lap lai duoc bang script, khong commit anh render)
+services/pdf-worker/poc/output/
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Docker local volumes
+infra/docker/volumes/

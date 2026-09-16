@@ -1,0 +1,538 @@
+{
+  "note": "Do tren may dev cuc bo (khong phai server production, khong phai thiet bi mobile). Chi dung de so sanh thu vien va phat hien loi som.",
+  "libraries": {
+    "renderer": "pypdfium2",
+    "link_extraction": "pypdf",
+    "image_lib": "Pillow"
+  },
+  "total_wall_seconds": 50.62889890000224,
+  "cases": [
+    {
+      "file": "sample_vi_text.pdf",
+      "declared_case": "vietnamese_text_with_links",
+      "status": "ok",
+      "n_pages": 5,
+      "render_timings_sample": [
+        {
+          "page": 1,
+          "variant": "thumb",
+          "seconds": 0.0011336000025039539
+        },
+        {
+          "page": 1,
+          "variant": "reading",
+          "seconds": 0.008703100000275299
+        },
+        {
+          "page": 2,
+          "variant": "thumb",
+          "seconds": 0.0012809000036213547
+        },
+        {
+          "page": 2,
+          "variant": "reading",
+          "seconds": 0.007253000003402121
+        },
+        {
+          "page": 3,
+          "variant": "thumb",
+          "seconds": 0.0010188000014750287
+        },
+        {
+          "page": 3,
+          "variant": "reading",
+          "seconds": 0.010306299998774193
+        }
+      ],
+      "avg_reading_render_seconds": 0.008846679999260232,
+      "max_reading_render_seconds": 0.010967099995468743,
+      "links_per_page": [
+        2,
+        0,
+        0,
+        0,
+        0
+      ],
+      "sample_links_page1": [
+        {
+          "rect_norm": [
+            0.08063491935500128,
+            0.20192666546144167,
+            0.5375661290333418,
+            0.22568274375102304
+          ],
+          "type": "external_uri",
+          "target": "https://www.misa.com.vn"
+        },
+        {
+          "rect_norm": [
+            0.08063491935500128,
+            0.23756078289581362,
+            0.5375661290333418,
+            0.261316861185395
+          ],
+          "type": "internal_goto",
+          "target": "named_or_explicit_dest"
+        }
+      ]
+    },
+    {
+      "file": "sample_rotated_mixed.pdf",
+      "declared_case": "rotated_mixed_sizes",
+      "status": "ok",
+      "n_pages": 4,
+      "render_timings_sample": [
+        {
+          "page": 1,
+          "variant": "thumb",
+          "seconds": 0.0006124000065028667
+        },
+        {
+          "page": 1,
+          "variant": "reading",
+          "seconds": 0.008566300006350502
+        },
+        {
+          "page": 2,
+          "variant": "thumb",
+          "seconds": 0.0012543000048026443
+        },
+        {
+          "page": 2,
+          "variant": "reading",
+          "seconds": 0.003664600008050911
+        },
+        {
+          "page": 3,
+          "variant": "thumb",
+          "seconds": 0.0006701999955112115
+        },
+        {
+          "page": 3,
+          "variant": "reading",
+          "seconds": 0.0036866000009467825
+        }
+      ],
+      "avg_reading_render_seconds": 0.0059401250036899,
+      "max_reading_render_seconds": 0.008566300006350502,
+      "links_per_page": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "sample_links_page1": []
+    },
+    {
+      "file": "sample_transparency.pdf",
+      "declared_case": "transparency",
+      "status": "ok",
+      "n_pages": 1,
+      "render_timings_sample": [
+        {
+          "page": 1,
+          "variant": "thumb",
+          "seconds": 0.0007322000019485131
+        },
+        {
+          "page": 1,
+          "variant": "reading",
+          "seconds": 0.011538999999174848
+        }
+      ],
+      "avg_reading_render_seconds": 0.011538999999174848,
+      "max_reading_render_seconds": 0.011538999999174848,
+      "links_per_page": [
+        0
+      ],
+      "sample_links_page1": []
+    },
+    {
+      "file": "sample_scanned_like.pdf",
+      "declared_case": "scanned_like_no_text",
+      "status": "ok",
+      "n_pages": 2,
+      "render_timings_sample": [
+        {
+          "page": 1,
+          "variant": "thumb",
+          "seconds": 0.0004960000078426674
+        },
+        {
+          "page": 1,
+          "variant": "reading",
+          "seconds": 0.010933700003079139
+        },
+        {
+          "page": 2,
+          "variant": "thumb",
+          "seconds": 0.0008917000086512417
+        },
+        {
+          "page": 2,
+          "variant": "reading",
+          "seconds": 0.012399400002323091
+        }
+      ],
+      "avg_reading_render_seconds": 0.011666550002701115,
+      "max_reading_render_seconds": 0.012399400002323091,
+      "links_per_page": [
+        0,
+        0
+      ],
+      "sample_links_page1": []
+    },
+    {
+      "file": "sample_many_pages.pdf",
+      "declared_case": "many_pages_30",
+      "status": "ok",
+      "n_pages": 30,
+      "render_timings_sample": [
+        {
+          "page": 1,
+          "variant": "thumb",
+          "seconds": 0.0006307000003289431
+        },
+        {
+          "page": 1,
+          "variant": "reading",
+          "seconds": 0.00935409999510739
+        },
+        {
+          "page": 2,
+          "variant": "thumb",
+          "seconds": 0.0009310000023106113
+        },
+        {
+          "page": 2,
+          "variant": "reading",
+          "seconds": 0.010450500005390495
+        },
+        {
+          "page": 3,
+          "variant": "thumb",
+          "seconds": 0.0012094999983673915
+        },
+        {
+          "page": 3,
+          "variant": "reading",
+          "seconds": 0.006676100005279295
+        }
+      ],
+      "avg_reading_render_seconds": 0.008956323334617385,
+      "max_reading_render_seconds": 0.01859760000661481,
+      "links_per_page": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "sample_links_page1": []
+    },
+    {
+      "file": "sample_stress_150pages.pdf",
+      "declared_case": "stress_150_pages",
+      "status": "ok",
+      "n_pages": 150,
+      "render_timings_sample": [
+        {
+          "page": 1,
+          "variant": "thumb",
+          "seconds": 0.0009632000001147389
+        },
+        {
+          "page": 1,
+          "variant": "reading",
+          "seconds": 0.007389999998849817
+        },
+        {
+          "page": 2,
+          "variant": "thumb",
+          "seconds": 0.0009962000040104613
+        },
+        {
+          "page": 2,
+          "variant": "reading",
+          "seconds": 0.007747600000584498
+        },
+        {
+          "page": 3,
+          "variant": "thumb",
+          "seconds": 0.0009531000105198473
+        },
+        {
+          "page": 3,
+          "variant": "reading",
+          "seconds": 0.008361000000149943
+        }
+      ],
+      "avg_reading_render_seconds": 0.008271970666925577,
+      "max_reading_render_seconds": 0.018433700010064058,
+      "links_per_page": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "sample_links_page1": []
+    },
+    {
+      "file": "sample_encrypted.pdf",
+      "declared_case": "encrypted_correct_password",
+      "status": "ok",
+      "n_pages": 5,
+      "render_timings_sample": [
+        {
+          "page": 1,
+          "variant": "thumb",
+          "seconds": 0.002261200002976693
+        },
+        {
+          "page": 1,
+          "variant": "reading",
+          "seconds": 0.00904140000056941
+        },
+        {
+          "page": 2,
+          "variant": "thumb",
+          "seconds": 0.0014102999994065613
+        },
+        {
+          "page": 2,
+          "variant": "reading",
+          "seconds": 0.007095900000422262
+        },
+        {
+          "page": 3,
+          "variant": "thumb",
+          "seconds": 0.0010349999938625842
+        },
+        {
+          "page": 3,
+          "variant": "reading",
+          "seconds": 0.009185400005662814
+        }
+      ],
+      "avg_reading_render_seconds": 0.008468980001634919,
+      "max_reading_render_seconds": 0.009229299990693107,
+      "links_per_page": [
+        2,
+        0,
+        0,
+        0,
+        0
+      ],
+      "sample_links_page1": [
+        {
+          "rect_norm": [
+            0.08063491935500128,
+            0.20192666546144167,
+            0.5375661290333418,
+            0.22568274375102304
+          ],
+          "type": "external_uri",
+          "target": "https://www.misa.com.vn"
+        },
+        {
+          "rect_norm": [
+            0.08063491935500128,
+            0.23756078289581362,
+            0.5375661290333418,
+            0.261316861185395
+          ],
+          "type": "internal_goto",
+          "target": "named_or_explicit_dest"
+        }
+      ]
+    },
+    {
+      "file": "sample_encrypted.pdf",
+      "declared_case": "encrypted_no_password_should_fail",
+      "status": "rejected_needs_password",
+      "error": "Failed to load document (PDFium: Incorrect password error)."
+    },
+    {
+      "file": "sample_corrupted.pdf",
+      "declared_case": "corrupted_should_fail",
+      "status": "rejected_corrupted_or_invalid",
+      "error": "Failed to load document (PDFium: Data format error)."
+    },
+    {
+      "file": "sample_wrong_mime.pdf",
+      "declared_case": "wrong_mime_should_fail",
+      "status": "rejected_invalid_signature"
+    }
+  ]
+}

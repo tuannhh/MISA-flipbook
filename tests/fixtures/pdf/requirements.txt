@@ -1,0 +1,3 @@
+# Chi dung de sinh PDF mau cho test, khong phai dependency cua worker production.
+reportlab==5.0.1
+pypdf==6.18.1

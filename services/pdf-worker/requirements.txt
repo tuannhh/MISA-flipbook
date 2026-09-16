@@ -1,0 +1,5 @@
+# Phien ban da kiem chung qua PoC P0 (xem services/pdf-worker/poc/ADR-P0-parser-renderer.md).
+# Pin phien ban cu the, khong dung latest cho production (ARCHITECTURE.md muc 1).
+pypdfium2==5.13.0
+pypdf==6.18.1
+Pillow==12.3.0
