@@ -134,11 +134,94 @@ Giai đoạn 2 (API + pipeline convert thật, chạy full trên Docker):
   instance) — chưa đo; hiện chỉ xác nhận đúng (correctness), chưa xác nhận hiệu năng dưới tải.
 - Backup/restore Postgres thật — chưa thử, vẫn ghi nhận mục tiêu RPO 24h/RTO 4h ở phần giả định.
 
-Chưa bắt đầu: P2-P6, Git tag bản stable.
-Điểm stable gần nhất: chưa có (P1 xong nhưng chưa cắt tag).
+**P2 — hoàn tất điều kiện đi tiếp theo ROADMAP.md, có bằng chứng chạy thật**:
+
+Theo chỉ đạo người dùng trước khi làm P2: "tách các service thành các worker để đảm bảo khi
+có 1 module bị lỗi cũng không ảnh hưởng tới toàn hệ thống" và "tách riêng FE và BE". Cả hai đã
+làm THẬT (không phải đổi tên gọi):
+
+- **Tách dispatcher thành 2 service độc lập** (`apps/dispatcher`, `apps/worker-convert`), thay vì
+  1 tiến trình vừa claim job vừa gọi pdf-worker như P1:
+  - `dispatcher` (claimer): CHỈ claim job từ outbox Postgres và đẩy vào BullMQ/Redis. Không gọi
+    pdf-worker, không có logic xử lý — do đó không thể crash vì lý do liên quan đến nội dung PDF.
+  - `worker-convert`: tiến trình DUY NHẤT gọi pdf-worker/ghi kết quả. Nếu code ở đây lỗi (PDF quá
+    lớn, bug xử lý manifest...), CHỈ container này bị ảnh hưởng.
+  - Sửa thêm 1 lỗ hổng phát hiện khi đọc lại code cũ: `reconcileStuckJobs()` trước đây chỉ chạy
+    1 lần lúc khởi động dispatcher, không chạy định kỳ — nếu dispatcher không tự restart thì job
+    kẹt "processing" sẽ không bao giờ được đưa về lại "queued". Đã sửa thành chạy theo chu kỳ
+    `RECONCILE_INTERVAL_MS` (mặc định 60s).
+  - **Đã kiểm chứng THẬT (thủ công, ghi lại đây vì khó tự động hoá trong CI)**: upload PDF 150
+    trang, kill `worker-convert` bằng SIGKILL đúng lúc job đang ở state 'processing' (giữa lúc
+    gọi pdf-worker). Kết quả: `api` vẫn health 200, `dispatcher` vẫn claim job mới bình thường
+    (log không có lỗi), Docker restart policy `unless-stopped` KHÔNG tự khởi động lại container
+    sau `docker kill` (đúng theo thiết kế của Docker — `unless-stopped` coi kill/stop thủ công là
+    ý định của operator, không tự phục hồi; nếu tiến trình bên TRONG container tự crash — OOM,
+    exception không bắt được — Docker MỚI tự restart theo policy này). Sau khi tự khởi động lại
+    `worker-convert` (`docker start`), BullMQ tự phát hiện job "stalled" (lock hết hạn vì worker
+    cũ chết giữa chừng) và giao lại job đó cho worker mới, job hoàn tất đúng
+    (`job.state=done`, `revision.state=ready`, đủ asset) — không mất, không kẹt vĩnh viễn, không
+    cần can thiệp thủ công vào DB. Đây là bằng chứng thật cho điều kiện đi tiếp của P2: "restart
+    worker không làm hỏng publish".
+- **Tách FE/BE hoàn toàn** (`apps/web`, Next.js 16 + React 19, container riêng, cổng 3001):
+  FE chỉ gọi `apps/api` qua HTTP/JSON thuần (Bearer JWT trong `localStorage`, không cookie/session
+  chia sẻ, không SSR-proxy). BE bật CORS có kiểm soát (`CORS_ORIGIN`, mặc định KHÔNG mở nếu không
+  khai báo). Không dùng chung process, DB, hay bất kỳ state nào giữa 2 app — có thể build/deploy/
+  scale độc lập.
+
+Backend bổ sung cho luồng "Upload → job → preview → publish → reader, permalink, title/thumbnail":
+- Migration `0006_public_reader.sql`: 3 hàm SECURITY DEFINER (`public_get_book`,
+  `public_list_page_assets`, `public_get_page_asset`) cho phép `app_user` đọc dữ liệu sách ĐÃ
+  PUBLISH mà KHÔNG cần `app.tenant_id`/`app.user_id` (đường riêng cho reader công khai, như đã
+  ghi chú trong `0003_rls_policies.sql` từ P1) — và tuyệt đối KHÔNG BAO GIỜ trả về asset
+  `kind='source_pdf'` qua đường này (đã test: id asset PDF gốc thật trả về 404 qua endpoint công
+  khai, kể cả khi biết đúng book_id).
+- `apps/api`: thêm `GET/PUT /books/:id/settings` (allowDownload, chọn thumbnail bìa),
+  `GET /books/:id/revisions`, `GET /books/:id/preview` (xem trước 1 revision TRƯỚC khi publish,
+  dùng lại đúng manifest.json + assets, không phải dữ liệu giả lập), `GET /books/:id/assets/:id`
+  (ảnh trang cho Creator, có xác thực), `PATCH /books/:id` (đổi tiêu đề), `POST /books/:id/publish`
+  (chỉ cho publish revision ở state 'ready'; kiểm tra revision thuộc đúng sách). Cột `cover_asset_id`
+  tự động suy ra từ thumbnail trang đầu của revision ĐANG PUBLISH nếu Creator chưa tự chọn — sách
+  draft không có cover_asset_id (tránh lộ ảnh của revision chưa duyệt).
+- `apps/web`: trang đăng nhập (tự chọn tenant nếu Creator thuộc nhiều tenant), dashboard (tạo/
+  liệt kê sách, upload PDF với polling trạng thái job, xem trước thumbnail từng trang, publish,
+  đổi tiêu đề, bật/tắt cho phép tải xuống, chọn ảnh bìa bằng cách bấm vào thumbnail), và
+  `/read/:permalink` — reader công khai không cần đăng nhập, điều hướng bằng nút trái/phải,
+  phím mũi tên, và vuốt cảm ứng (đã test tại viewport 375×812 qua trình duyệt thật). **Ghi chú
+  trung thực**: đây là slideshow ảnh từng trang với chuyển cảnh mượt, CHƯA phải hiệu ứng lật
+  trang 3D kiểu Heyzine như PLAN.md mô tả ban đầu — điều kiện đi tiếp của P2 trong ROADMAP.md chỉ
+  yêu cầu "PDF thực đọc được trên desktop/mobile" (đã đạt), hiệu ứng lật trang thật là việc còn
+  mở, nên làm ở P2 polish hoặc gộp cùng P4.
+- **Test tự động mới** (`tests/integration/p2_e2e.test.js`, 16/16 PASS, chạy lặp lại nhiều lần):
+  draft chưa publish → public 404; upload → job done → preview có đủ ảnh; publish revision không
+  tồn tại → 404; publish thành công → cover tự động; public reader đọc được sách đã publish nhưng
+  KHÔNG tự nhảy sang revision mới hơn chưa publish (tách bạch draft/published đúng); asset id sai
+  → 404 (không dò được dữ liệu qua brute-force); cài đặt allowDownload/thumbnail hoạt động đúng.
+  Đã chạy lại `tenant_isolation.test.js` (13/13) và `api_e2e.test.js` (14/14) — không hồi quy.
+- Docker Compose: thêm service `web`, tách `dispatcher`/`worker-convert`, xác nhận cold start
+  THẬT TỪ RỖNG (`down -v` rồi `up --build`) với đủ 7 service (postgres/redis/migrate/api/web/
+  dispatcher/worker-convert/pdf-worker — 8 thực ra, đếm cả migrate one-shot) lên healthy, chạy
+  đủ 6 file migration, luồng upload→publish→đọc công khai hoạt động qua cả API thô lẫn UI thật
+  trong trình duyệt.
+
+Chưa xong trong P2 (không được coi là hoàn tất, ghi rõ để không tự nhận):
+- Hiệu ứng lật trang 3D (flip animation) như Heyzine — hiện là slideshow/crossfade.
+- Mật khẩu bảo vệ sách công khai (`book_settings.password_hash` đã có cột nhưng chưa có luồng
+  nhập mật khẩu ở reader) — public reader hiện CHẶN HẲN (403) nếu Creator bật mật khẩu, thay vì
+  cho qua sai — an toàn nhưng chưa đúng chức năng, để dành cho P3 theo ROADMAP.md.
+- Trang admin trên FE (tạo tenant/user/membership hiện chỉ làm qua API thô, đúng như ROADMAP.md
+  xếp "Admin" vào P4).
+- Test tải/concurrency thật (nhiều Creator upload/publish đồng thời) — vẫn là việc mở từ P1.
+- Reconciler DB (job 'processing' quá hạn quay lại 'queued') mới kiểm chứng qua đọc code + suy
+  luận từ test BullMQ-stalled ở trên, CHƯA có test tự động giả lập đúng kịch bản
+  STUCK_JOB_TIMEOUT_MINUTES thật (15 phút, quá lâu để chạy trong CI).
+
+Chưa bắt đầu: P3-P6, Git tag bản stable.
+Điểm stable gần nhất: chưa có (P1+P2 xong nhưng chưa cắt tag).
 Handoff tài liệu: PLANNING-001 (draft); không coi là phần mềm có thể rollback.
-Bước tiếp theo: bắt đầu P2 theo ROADMAP.md (khả năng cao là apps/web — reader/dashboard), hoặc
-đóng các mục "chủ động bỏ phạm vi" ở trên nếu người dùng muốn cứng hoá P1 trước khi sang P2.
+Bước tiếp theo: P3 theo ROADMAP.md (mật khẩu, download, replace/revision, embed, link share) —
+book_settings.password_hash đã có cột sẵn từ P1, cần thêm luồng nhập mật khẩu ở FE + kiểm tra ở
+`public_get_book`/`public_get_page_asset`; hoặc đóng các mục "chưa xong trong P2" ở trên nếu
+người dùng muốn cứng hoá P2 trước khi sang P3.
 
 ## Cách cập nhật
 Sau mỗi đợt công việc, ghi: đã đổi gì, quyết định/giả định mới, test nào thực sự chạy, kết quả/lỗi, commit và bước kế tiếp.

@@ -23,6 +23,13 @@ Theo chỉ đạo người dùng: ưu tiên bản chạy Docker; DevOps tự siz
   cold start từ volume rỗng thành công qua `docker compose up --build`, pipeline PDF thật chạy
   hết tới trạng thái done/ready). apps/web và reverse proxy chủ động dời sang P2/P3 (không nằm
   trong điều kiện đi tiếp của P1 theo bảng trên).
+- P2: **điều kiện đi tiếp đã đạt và kiểm chứng thật** — "PDF thực đọc được trên desktop/mobile"
+  (reader công khai `apps/web/read/:permalink`, test qua trình duyệt thật ở desktop và mobile
+  375×812) và "restart worker không làm hỏng publish" (tách `dispatcher`/`worker-convert` thành
+  2 service độc lập; kill `worker-convert` bằng SIGKILL giữa lúc xử lý job 150 trang, hệ thống
+  còn lại không bị ảnh hưởng, job tự phục hồi qua BullMQ stalled-job detection sau khi worker
+  sống lại, hoàn tất đúng). Chi tiết đầy đủ + giới hạn còn mở (chưa có hiệu ứng lật trang 3D,
+  chưa có mật khẩu bảo vệ, chưa có trang Admin trên FE) ở MEMORYBANK.md.
 
 P6 có thể khảo sát từ P0, nhưng không khóa tiến độ đọc sách vào thời gian Meta/LinkedIn xét duyệt. Mốc v1.0-core đạt P5 phải ghi rõ social trực tiếp chưa hoàn tất nếu P6 còn mở; không ghi toàn bộ yêu cầu đã xong.
 

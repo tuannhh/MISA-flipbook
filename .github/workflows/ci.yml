@@ -33,8 +33,12 @@ jobs:
           INTERNAL_API_TOKEN=ci_internal_token_${{ github.run_id }}
           PDF_MAX_BYTES=209715200
           PDF_PIPELINE_VERSION=v1
+          CORS_ORIGIN=http://localhost:3001
+          WEB_PUBLIC_API_BASE_URL=http://localhost:3000
           DISPATCHER_POLL_INTERVAL_MS=1000
-          DISPATCHER_CONCURRENCY=2
+          DISPATCHER_RECONCILE_INTERVAL_MS=10000
+          DISPATCHER_JOB_ATTEMPTS=3
+          WORKER_CONVERT_CONCURRENCY=2
           EOF
 
       - name: Build and start full stack (cold start, no pre-existing volumes)
@@ -67,13 +71,22 @@ jobs:
           APP_USER_URL: postgres://app_user:ci_app_password_${{ github.run_id }}@127.0.0.1:5432/misa_flipbook
         run: node tenant_isolation.test.js
 
-      - name: Run HTTP-level API e2e tests
+      - name: Run HTTP-level API e2e tests (P1)
         working-directory: tests/integration
         env:
           API_BASE_URL: http://127.0.0.1:3000
           ADMIN_EMAIL: admin@misa.local
           ADMIN_PASSWORD: ChangeThisAdminPw123!
         run: node api_e2e.test.js
+
+      - name: Run publish/preview/public-reader e2e tests (P2)
+        working-directory: tests/integration
+        env:
+          API_BASE_URL: http://127.0.0.1:3000
+          ADMIN_EMAIL: admin@misa.local
+          ADMIN_PASSWORD: ChangeThisAdminPw123!
+          JOB_TIMEOUT_MS: 60000
+        run: node p2_e2e.test.js
 
       - name: Dump logs on failure
         if: failure()

@@ -2,7 +2,7 @@
   "name": "@misa-flipbook/dispatcher",
   "private": true,
   "version": "0.1.0",
-  "description": "Dieu phoi job chuyen doi PDF: Postgres outbox (jobs) -> BullMQ/Redis -> goi pdf-worker.",
+  "description": "Claim job tu Postgres outbox (jobs) va day vao BullMQ/Redis. KHONG xu ly job - xem apps/worker-convert.",
   "scripts": {
     "start": "node src/index.js"
   },

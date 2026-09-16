@@ -1,34 +1,35 @@
 "use strict";
 
 /**
- * Dieu phoi job chuyen doi PDF.
+ * Dispatcher = CHI claim job, khong xu ly (khong goi pdf-worker). Tach rieng khoi
+ * worker-convert (services xu ly thuc su) de dam bao 1 module loi khong keo theo
+ * ca he thong: neu worker-convert crash/OOM giua chung mot job "doc" (vd PDF qua
+ * lon, bug code convert), tien trinh claim job nay VAN chay binh thuong, job moi
+ * van duoc dua vao hang doi; Docker chi restart container worker-convert, khong
+ * anh huong claim loop hay cac job khac dang cho.
  *
  * Postgres bang `jobs` la outbox ben vung (nguon su that ve trang thai); Redis/BullMQ
- * chi la hang doi thuc thi (retry/backoff/concurrency) - dung ARCHITECTURE.md muc 1:
- * "PostgreSQL giu job ledger/outbox ben vung, Redis la hang doi, khong la nguon duy nhat."
+ * chi la hang doi thuc thi (retry/backoff/concurrency) - ARCHITECTURE.md muc 1.
  *
- * Vong doi 1 job: queued (API tao) -> processing (dispatcher claim + BullMQ dang chay)
- * -> done | failed.
+ * Vong doi 1 job: queued (API tao) -> processing (dispatcher claim, worker-convert
+ * dang xu ly) -> done | failed.
  *
- * Reconciler: khi dispatcher khoi dong, job con ket "processing" qua lau (dispatcher
- * cu bi kill giua chung) duoc dua ve lai "queued" - dung "Sau restart, reconciler dua
- * job dang do tro lai hang doi" (ARCHITECTURE.md muc 1).
+ * Reconciler chay theo chu ky (khong chi luc khoi dong): job con ket "processing"
+ * qua lau (vd worker-convert bi kill giua chung, khong kip bao loi) duoc dua ve
+ * lai "queued" de duoc claim lai - dung "Sau restart, reconciler dua job dang do
+ * tro lai hang doi" (ARCHITECTURE.md muc 1), ke ca khi CHINH dispatcher khong bi
+ * restart (truoc day chi chay 1 lan luc start, la 1 khe ho da sua o day).
  */
 
-const path = require("path");
-const fs = require("fs/promises");
 const { Pool } = require("pg");
-const { Queue, Worker } = require("bullmq");
+const { Queue } = require("bullmq");
 const IORedis = require("ioredis");
 
 const DATABASE_URL = requireEnv("DATABASE_URL");
 const REDIS_URL = requireEnv("REDIS_URL");
-const PDF_WORKER_URL = requireEnv("PDF_WORKER_URL");
-const INTERNAL_API_TOKEN = requireEnv("INTERNAL_API_TOKEN");
-const STORAGE_ROOT = path.resolve(requireEnv("STORAGE_ROOT"));
 
 const POLL_INTERVAL_MS = Number(process.env.POLL_INTERVAL_MS ?? 2000);
-const CONCURRENCY = Number(process.env.CONCURRENCY ?? 2); // ARCHITECTURE.md pilot: 1-2 job dong thoi
+const RECONCILE_INTERVAL_MS = Number(process.env.RECONCILE_INTERVAL_MS ?? 60000);
 const STUCK_JOB_TIMEOUT_MINUTES = Number(process.env.STUCK_JOB_TIMEOUT_MINUTES ?? 15);
 const JOB_ATTEMPTS = Number(process.env.JOB_ATTEMPTS ?? 3);
 const QUEUE_NAME = "pdf-conversion";
@@ -103,148 +104,28 @@ async function pollAndClaim(queue) {
   }
 }
 
-async function fetchJobContext(client, jobId) {
-  const { rows } = await client.query(
-    `SELECT j.id AS job_id, j.tenant_id, j.book_id, j.revision_id, j.attempts,
-            r.source_key, r.pipeline_version
-     FROM jobs j
-     JOIN revisions r ON r.id = j.revision_id
-     WHERE j.id = $1`,
-    [jobId]
-  );
-  return rows[0] ?? null;
-}
-
-async function callPdfWorker(sourceKey, outputKey, pipelineVersion) {
-  const res = await fetch(`${PDF_WORKER_URL}/internal/convert`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-internal-token": INTERNAL_API_TOKEN,
-    },
-    body: JSON.stringify({ source_key: sourceKey, output_key: outputKey, pipeline_version: pipelineVersion }),
-  });
-  if (!res.ok) {
-    throw new Error(`pdf-worker HTTP ${res.status}`);
-  }
-  return res.json();
-}
-
-async function processJob(bullJob) {
-  const { jobId } = bullJob.data;
-  const isLastAttempt = bullJob.attemptsMade + 1 >= (bullJob.opts.attempts ?? 1);
-
-  const ctx = await withAdminTx((client) => fetchJobContext(client, jobId));
-  if (!ctx) {
-    console.warn(`[worker] Job ${jobId} khong con ton tai trong DB, bo qua.`);
-    return;
-  }
-
-  const outputKey = `${ctx.tenant_id}/${ctx.book_id}/${ctx.revision_id}/derived`;
-
-  try {
-    const result = await callPdfWorker(ctx.source_key, outputKey, ctx.pipeline_version);
-
-    if (result.status === "error") {
-      // Loi ky vong (mat khau/corrupted/sai chu ky) - KHONG retry, day khong phai loi
-      // tam thoi ma la du lieu dau vao khong hop le.
-      await finalizeFailure(ctx, `${result.reason}: ${result.message}`);
-      return;
-    }
-
-    await finalizeSuccess(ctx, outputKey, result.manifest);
-  } catch (err) {
-    if (isLastAttempt) {
-      await finalizeFailure(ctx, `He thong loi sau ${bullJob.attemptsMade + 1} lan thu: ${err.message}`);
-    } else {
-      console.warn(`[worker] Job ${jobId} loi tam thoi (se retry): ${err.message}`);
-      throw err; // cho BullMQ tu retry theo backoff
-    }
-  }
-}
-
-async function finalizeSuccess(ctx, outputKey, manifest) {
-  const manifestKey = `${outputKey}/manifest.json`;
-  const manifestPath = path.join(STORAGE_ROOT, manifestKey);
-  await fs.mkdir(path.dirname(manifestPath), { recursive: true });
-  await fs.writeFile(manifestPath, JSON.stringify(manifest, null, 2), "utf8");
-
-  await withAdminTx(async (client) => {
-    await client.query(
-      `UPDATE revisions SET state = 'ready', manifest_key = $1 WHERE id = $2`,
-      [manifestKey, ctx.revision_id]
-    );
-
-    const manifestStat = await fs.stat(manifestPath);
-    await client.query(
-      `INSERT INTO assets (tenant_id, book_id, revision_id, kind, object_key, content_type, bytes)
-       VALUES ($1,$2,$3,'manifest',$4,'application/json',$5)`,
-      [ctx.tenant_id, ctx.book_id, ctx.revision_id, manifestKey, manifestStat.size]
-    );
-
-    for (const p of manifest.pages) {
-      for (const [variant, relPath] of Object.entries(p.images)) {
-        const kind = variant === "thumb" ? "thumbnail" : "page_image";
-        const contentType = relPath.endsWith(".webp") ? "image/webp" : "image/jpeg";
-        const fullPath = path.join(STORAGE_ROOT, outputKey, relPath);
-        const stat = await fs.stat(fullPath);
-        await client.query(
-          `INSERT INTO assets (tenant_id, book_id, revision_id, kind, object_key, content_type, bytes)
-           VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-          [ctx.tenant_id, ctx.book_id, ctx.revision_id, kind, `${outputKey}/${relPath}`, contentType, stat.size]
-        );
-      }
-    }
-
-    await client.query(
-      `UPDATE jobs SET state = 'done', progress = 100, error = NULL, attempts = attempts + 1, updated_at = now()
-       WHERE id = $1`,
-      [ctx.job_id]
-    );
-  });
-  console.log(`[worker] Job ${ctx.job_id} hoan tat (${manifest.n_pages} trang).`);
-}
-
-async function finalizeFailure(ctx, errorMessage) {
-  await withAdminTx(async (client) => {
-    await client.query(`UPDATE revisions SET state = 'failed' WHERE id = $1`, [ctx.revision_id]);
-    await client.query(
-      `UPDATE jobs SET state = 'failed', error = $1, attempts = attempts + 1, updated_at = now() WHERE id = $2`,
-      [errorMessage, ctx.job_id]
-    );
-  });
-  console.warn(`[worker] Job ${ctx.job_id} that bai: ${errorMessage}`);
-}
-
 async function main() {
   await reconcileStuckJobs();
 
-  // Tu tao instance ioredis cho tung ben (Queue/Worker) thay vi de BullMQ tu
-  // require('ioredis') noi bo - tranh loi resolve module trong moi truong nay.
-  // Worker va Queue KHONG dung chung 1 connection: Worker dung lenh block (BRPOPLPUSH)
-  // de cho job moi, dung chung se lam Queue bi tranh chap/block theo.
+  // Tu tao instance ioredis rieng thay vi de BullMQ tu require('ioredis') noi bo -
+  // tranh loi resolve module trong moi truong nay (xem ghi chu lich su trong git log).
   const queueConnection = new IORedis(REDIS_URL, { maxRetriesPerRequest: null });
-  const workerConnection = new IORedis(REDIS_URL, { maxRetriesPerRequest: null });
   const queue = new Queue(QUEUE_NAME, { connection: queueConnection });
-  const worker = new Worker(QUEUE_NAME, processJob, {
-    connection: workerConnection,
-    concurrency: CONCURRENCY,
-  });
-  worker.on("failed", (job, err) => {
-    console.error(`[bullmq] Job ${job?.id} that bai sau ${job?.attemptsMade} lan thu: ${err.message}`);
-  });
 
-  console.log(`Dispatcher dang chay. poll=${POLL_INTERVAL_MS}ms concurrency=${CONCURRENCY}`);
-  setInterval(() => {
+  console.log(`Dispatcher (claimer) dang chay. poll=${POLL_INTERVAL_MS}ms reconcile=${RECONCILE_INTERVAL_MS}ms`);
+  const pollTimer = setInterval(() => {
     pollAndClaim(queue).catch((err) => console.error("[poller] Loi:", err.message));
   }, POLL_INTERVAL_MS);
+  const reconcileTimer = setInterval(() => {
+    reconcileStuckJobs().catch((err) => console.error("[reconciler] Loi:", err.message));
+  }, RECONCILE_INTERVAL_MS);
 
   const shutdown = async () => {
     console.log("Dang tat dispatcher...");
-    await worker.close();
+    clearInterval(pollTimer);
+    clearInterval(reconcileTimer);
     await queue.close();
     queueConnection.disconnect();
-    workerConnection.disconnect();
     await pool.end();
     process.exit(0);
   };

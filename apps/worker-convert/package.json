@@ -1,0 +1,14 @@
+{
+  "name": "@misa-flipbook/worker-convert",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Xu ly job chuyen doi PDF: nhan job tu BullMQ, goi pdf-worker, ghi ket qua. Tach rieng khoi apps/dispatcher (chi claim job) de co lo hong loi.",
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "bullmq": "6.3.6",
+    "ioredis": "6.0.0",
+    "pg": "8.23.0"
+  }
+}

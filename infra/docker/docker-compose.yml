@@ -68,6 +68,7 @@ services:
       STORAGE_ROOT: /data/storage
       PDF_MAX_BYTES: ${PDF_MAX_BYTES:-209715200}
       PDF_PIPELINE_VERSION: ${PDF_PIPELINE_VERSION:-v1}
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3001}
       PORT: "3000"
     volumes:
       - storage_data:/data/storage
@@ -83,6 +84,28 @@ services:
         limits:
           cpus: "1"
           memory: 512M
+
+  # web (FE): app Next.js RIENG, chi goi api qua HTTP/JSON (Bearer JWT, CORS) -
+  # khong SSR-proxy, khong dung chung process/DB voi BE ("tach rieng FE va BE").
+  # NEXT_PUBLIC_API_BASE_URL phai la URL trinh duyet cua NGUOI DUNG goi toi duoc
+  # (vd http://localhost:3000 khi test tren may dev) - KHONG dung hostname noi bo
+  # cua Docker network (vd http://api:3000), vi trinh duyet chay ngoai mang do.
+  web:
+    build:
+      context: ../../apps/web
+      args:
+        NEXT_PUBLIC_API_BASE_URL: ${WEB_PUBLIC_API_BASE_URL:-http://localhost:3000}
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:3001:3001"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
 
   pdf-worker:
     build:
@@ -105,9 +128,39 @@ services:
           cpus: "1"
           memory: 1G
 
+  # dispatcher: CHI claim job tu Postgres outbox roi day vao BullMQ/Redis - khong
+  # goi pdf-worker, khong xu ly. Neu code xu ly (worker-convert) co bug/crash, claim
+  # loop nay khong bi anh huong - job moi van tiep tuc duoc dua vao hang doi.
   dispatcher:
     build:
       context: ../../apps/dispatcher
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgres://app_user:${APP_DB_PASSWORD}@postgres:5432/${POSTGRES_DB:-misa_flipbook}
+      REDIS_URL: redis://redis:6379
+      POLL_INTERVAL_MS: ${DISPATCHER_POLL_INTERVAL_MS:-2000}
+      RECONCILE_INTERVAL_MS: ${DISPATCHER_RECONCILE_INTERVAL_MS:-60000}
+      JOB_ATTEMPTS: ${DISPATCHER_JOB_ATTEMPTS:-3}
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128M
+
+  # worker-convert: tien trinh DUY NHAT goi pdf-worker va ghi ket qua job. Tach khoi
+  # dispatcher de co lo hong loi that su (xem apps/worker-convert/src/index.js).
+  # Co the scale ra nhieu instance (Worker cung queue) neu can throughput cao hon,
+  # ma khong dung gi den dispatcher/api.
+  worker-convert:
+    build:
+      context: ../../apps/worker-convert
     restart: unless-stopped
     depends_on:
       postgres:
@@ -124,8 +177,7 @@ services:
       PDF_WORKER_URL: http://pdf-worker:8000
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN}
       STORAGE_ROOT: /data/storage
-      POLL_INTERVAL_MS: ${DISPATCHER_POLL_INTERVAL_MS:-2000}
-      CONCURRENCY: ${DISPATCHER_CONCURRENCY:-2}
+      CONCURRENCY: ${WORKER_CONVERT_CONCURRENCY:-2}
     volumes:
       - storage_data:/data/storage
     deploy:

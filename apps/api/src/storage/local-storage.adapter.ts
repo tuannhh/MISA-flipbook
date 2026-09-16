@@ -34,6 +34,14 @@ export class LocalStorageAdapter implements StorageAdapter {
     return { bytes: data.length };
   }
 
+  async readBuffer(objectKey: string): Promise<Buffer> {
+    return fs.promises.readFile(this.resolveSafe(objectKey));
+  }
+
+  createReadStream(objectKey: string): fs.ReadStream {
+    return fs.createReadStream(this.resolveSafe(objectKey));
+  }
+
   getAbsolutePath(objectKey: string): string {
     return this.resolveSafe(objectKey);
   }
