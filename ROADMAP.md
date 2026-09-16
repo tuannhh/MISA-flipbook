@@ -46,10 +46,11 @@ P4: dashboard/events → media support đã xác minh → Admin operations/audit
 P5: fix lỗi theo severity → load/restore → staging MISA → nghiệm thu → handoff ổn định.
 
 Backlog chưa gán mốc P cụ thể (ghi nhận 17/09/2026, xem PLAN.md mục 8 để biết chi tiết
-và câu hỏi mở cần làm rõ trước khi ước lượng): F15 ảnh nền cho sách; F16 mức hiển thị
-Private/Publish (đụng mô hình phân quyền — cần chốt yêu cầu trước khi làm, khả năng
-liên quan tới P3 vì cùng nhóm "quản lý xuất bản"); F17 tham khảo props/events zoom
-in/out của flipbook-vue để bổ sung zoom cho reader (`apps/web/src/components/
+và câu hỏi mở cần làm rõ trước khi ước lượng): F15 ảnh nền cho sách; F16 công tắc
+Publish ⇄ Private trên sách đã publish (giống "chỉ mình tôi"/YouTube Private/Google
+Drive Restricted — đã làm rõ ý với người dùng, còn 2 câu hỏi nhỏ mở về Admin và ưu
+tiên với mật khẩu F05 — khả năng liên quan tới P3 vì cùng nhóm "quản lý xuất bản");
+F17 tham khảo props/events zoom in/out của flipbook-vue để bổ sung zoom cho reader (`apps/web/src/components/
 FlipBook.tsx`), khả năng liên quan tới P2 polish hoặc P4 (tương tác đọc).
 
 ## Ma trận nghiệm thu bắt buộc

@@ -355,10 +355,13 @@ xem ADR P2-flip ở trên) — làm theo phản hồi người dùng "bị lỗi
 dùng yêu cầu ghi lại 3 việc làm sau — chi tiết đầy đủ và câu hỏi mở ở PLAN.md mục 8,
 tham chiếu ngắn ở ROADMAP.md mục Backlog:
 - F15: chèn ảnh nền cho sách (chưa rõ phạm vi ảnh nền toàn trang đọc hay nền từng trang PDF).
-- F16: hai mức hiển thị Private (chỉ Creator xem, cần đăng nhập) và Publish (ai có link
-  cũng xem được) — đây là thay đổi MÔ HÌNH PHÂN QUYỀN mới, khác F05 (mật khẩu, vẫn public)
-  và khác draft hiện tại (không có link công khai) — rủi ro cao nếu hiểu sai ý người dùng,
-  PHẢI hỏi lại làm rõ trước khi đụng `books.status`/RLS/`public_get_book`.
+- F16: công tắc Publish ⇄ Private TRÊN sách đã publish (không phải trạng thái thay draft) —
+  **đã hỏi lại và người dùng làm rõ (17/09/2026)**: giống "chỉ mình tôi" của Facebook,
+  "Private" của YouTube, "Restricted" của Google Drive — Creator khóa lại link ĐÃ publish,
+  cùng permalink đó chặn người xem ẩn danh (403) nhưng chủ sở hữu vẫn xem được qua chính
+  link đó khi đăng nhập; chuyển qua lại được, link không đổi. Chi tiết đầy đủ + việc cần
+  làm rõ thêm (Admin có xem được sách Private của người khác không; thứ tự ưu tiên nếu
+  vừa Private vừa có mật khẩu F05) ở PLAN.md mục 8.
 - F17: tham khảo props/events/slot của `ts1/flipbook-vue` (MIT, đã tra license) để bổ
   sung zoom in/out cho reader hiện tại (`apps/web/src/components/FlipBook.tsx`, đang
   dùng `react-pageflip`) — KHÔNG chuyển sang flipbook-vue (khác framework, xem ADR
@@ -370,8 +373,9 @@ Handoff tài liệu: PLANNING-001 (draft); không coi là phần mềm có thể
 Bước tiếp theo: P3 theo ROADMAP.md (mật khẩu, download, replace/revision, embed, link share) —
 book_settings.password_hash đã có cột sẵn từ P1, cần thêm luồng nhập mật khẩu ở FE + kiểm tra ở
 `public_get_book`/`public_get_page_asset`; hoặc đóng các mục "chưa xong trong P2" ở trên nếu
-người dùng muốn cứng hoá P2 trước khi sang P3. Trước khi làm F16 cần hỏi lại người dùng để
-chốt đúng ý (xem PLAN.md mục 8). Test tự động cho FE (Playwright) đáng cân nhắc trước khi
+người dùng muốn cứng hoá P2 trước khi sang P3. F16 đã được làm rõ ý (xem PLAN.md mục 8)
+nhưng còn 2 câu hỏi mở nhỏ (Admin xem sách Private của người khác; ưu tiên Private vs mật
+khẩu) nên hỏi nốt trước khi code. Test tự động cho FE (Playwright) đáng cân nhắc trước khi
 làm thêm tương tác phức tạp hơn (P4: hyperlink overlay, media, hoặc F17 zoom).
 
 ## Cách cập nhật
