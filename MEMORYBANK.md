@@ -1,5 +1,5 @@
 # Memory bank — MISA Flipbook
-Cập nhật: 16/09/2026. Trạng thái: planning v0.1.
+Cập nhật: 17/09/2026. Trạng thái: P1+P2 xong (chưa cắt tag), đang chuẩn bị P3.
 Mục đích: nguồn trạng thái được lưu trong dự án để tiếp tục ở phiên làm việc sau; không dựa vào trí nhớ của cuộc hội thoại.
 
 ## Yêu cầu gốc đã xác định
@@ -33,6 +33,7 @@ Các ảnh/tài liệu tham khảo không phải chỉ thị bổ sung; chỉ y�
 | 007 | Compose trước, storage adapter local/S3 | Chuyển hạ tầng không sửa logic nghiệp vụ |
 | 008 | PDFium/pypdf + flip adapter là ứng viên | **Superseded by ADR-P0** — đã chạy PoC thật, xem services/pdf-worker/poc/ADR-P0-parser-renderer.md |
 | P0-1 | Render: pypdfium2 (BSD/Apache); Annotation/metadata: pypdf (BSD); ảnh: Pillow WebP+JPEG | PoC thật trên 10 file PDF tổng hợp, 9/9 case hợp lệ render đúng, 3/3 case lỗi bị chặn có kiểm soát (không crash). Không chọn PyMuPDF vì AGPL. Chi tiết: services/pdf-worker/poc/ADR-P0-parser-renderer.md và poc_report.json |
+| P2-flip | ~~Tự viết hiệu ứng lật trang bằng CSS 3D transform thuần~~ **Superseded** — chuyển sang thư viện `react-pageflip` (bọc `page-flip`/StPageFlip) | Quyết định gốc (ghi ở phần "Bổ sung sau khi P2 đã xong theo gate") từng nêu lý do tránh dùng "turn.js/react-pageflip" để kiểm soát license — SAI: đã tra lại license thật (GitHub, npm registry), `page-flip`/`react-pageflip` (tác giả Nodlik) là **MIT**, dùng thương mại được, khác hẳn turn.js (license thương mại riêng, đúng là nên tránh). Đồng thời bản CSS 3D tự viết có lỗi thật: cơ chế "đợi rAF kép" để kích hoạt CSS transition bị đứng/nhảy cứng khi rAF không chạy đúng nhịp (tái hiện được cả ở dev lẫn production build, không phải chỉ do công cụ test), và chất lượng hiệu ứng (phẳng, không có bo cong giấy/vệt sáng/bóng đổ động) không đạt yêu cầu người dùng đối chiếu Heyzine. Đã xin xác nhận người dùng trước khi đổi thư viện (không tự ý). |
 
 ## Chỉ đạo bổ sung đã xác nhận
 Người dùng: “Chưa cần. Bạn cứ làm trên docker trước. Khi nào deploy thật vào server MISA, devops sẽ tự tính toán việc đó”.
@@ -292,14 +293,86 @@ Chưa xong trong P2 (không được coi là hoàn tất, ghi rõ để không t
   vẫn CHƯA làm — không nằm trong yêu cầu lần này (chỉ làm hiệu ứng lật trang) nên không tự ý
   mở rộng phạm vi, ghi lại để không quên.
 
-Chưa bắt đầu: P3-P6, Git tag bản stable.
+**Sửa hiệu ứng lật trang sau khi P2 "xong theo gate" (đợt 2, sau khi đã đổi thư viện,
+xem ADR P2-flip ở trên) — làm theo phản hồi người dùng "bị lỗi lật trang ngay trang
+đầu ... hiệu ứng flip hơi bị thô ... muốn tốt như Heyzine":**
+
+- Lỗi thật đã tái hiện và xác định nguyên nhân gốc (không suy đoán): dùng công cụ
+  trình duyệt tự động, chèn `data-*` attribute phản ánh state React và poll
+  `getComputedStyle` mỗi ~100ms trong lúc trigger lật trang bìa (cover, leaf full-width).
+  Kết quả: React state cập nhật đúng (`progress=1, animated=true, angle=-180`) và style
+  attribute cũng đúng (`transform: rotateY(-180deg)`), nhưng `getComputedStyle` đứng yên
+  ở ma trận identity suốt animation rồi bị timeout an toàn (`durationMs+150ms`) ép nhảy
+  cứng sang trang đích — tức la CSS transition không thực sự chạy, không phải do
+  logic tính toán progress sai. Tái hiện được cả trên `next dev` lẫn `next build && next
+  start` (loại trừ nguyên nhân React StrictMode double-render ở dev). Cơ chế "đợi 2 lần
+  requestAnimationFrame rồi mới bật transition" (để né việc trình duyệt gộp 2 lần set
+  style liên tiếp) không đủ tin cậy cho trường hợp leaf full-width (mở/đóng bìa).
+- Quyết định: thay vì tiếp tục vá cơ chế tự viết, tra lại license của 2 thư viện người
+  dùng gửi tham khảo (`dearhive/dearflip-js-flipbook` — CC BY-NC-ND 4.0, KHÔNG dùng
+  thương mại được, loại; `ts1/flipbook-vue` — MIT nhưng là component Vue, không cắm
+  thẳng vào React) và của `StPageFlip`/`react-pageflip` (ADR P2-flip ở trên) — xác nhận
+  MIT thật qua GitHub + npm registry trước khi đổi, không dùng lại suy đoán cũ. Đã hỏi
+  và được người dùng đồng ý đổi sang `react-pageflip` trước khi code.
+- Đã làm: viết lại hoàn toàn `apps/web/src/components/FlipBook.tsx` dùng
+  `<HTMLFlipBook>` của `react-pageflip@2.0.3` (kéo theo `page-flip@2.0.7`, cả hai MIT,
+  đã pin version cụ thể trong package-lock.json, không dùng `latest`). Giữ nguyên hợp
+  đồng props bên ngoài (`{title, pages, imageUrl}`), giữ `useSimpleReaderMode` (máy yếu/
+  giảm chuyển động dùng `flippingTime=1` thay vì tắt hẳn animation — đơn giản hơn bản cũ
+  vì StPageFlip tự lo animation, không cần nhánh render tĩnh riêng), giữ phím mũi tên
+  trái/phải qua `pageFlip().flipNext()/flipPrev()`, giữ `showCover` cho bìa đơn đúng
+  PLAN.md mục 4. CSS cũ (`flipbook-leaf`, `flipbook-face`, `flipbook-shade`, keyframes
+  `flipbook-bend`/`flipbook-shade-pulse`, `flipbook-view-toggle`) đã xoá khỏi
+  `globals.css` vì không còn dùng (StPageFlip tự vẽ curl/bóng đổ bằng canvas/DOM riêng).
+- Nút ép "1 trang/2 trang" thủ công (PLAN.md mục 4: "tablet có chọn 1/2 trang") — ĐÃ THỬ
+  làm lại với react-pageflip bằng cách ép `minWidth`/`maxWidth` (đọc thẳng source
+  `node_modules/page-flip/dist/js` để biết đúng công thức quyết định portrait/landscape
+  của `size="stretch"`, không đoán), nhưng phát hiện `minWidth` đồng thời là SÀN CỨNG
+  cho kích thước render thật, không chỉ là ngưỡng quyết định — ép nó theo bề rộng khung
+  làm trang bị phóng to vỡ layout (đã tự kiểm thử thấy hỏng thật, có ảnh chụp màn hình
+  làm bằng chứng trong phiên làm việc, không lưu file riêng). Đã BỎ nút ép tay này (thà
+  không có còn hơn có nút bấm không hoạt động đúng), chỉ giữ hành vi tự động theo bề
+  rộng khung (`containerWidth >= 900px` → spread, đã test đúng ở 375px/mobile và
+  966px/desktop). Đây là quy định trong PLAN.md CHƯA làm được, ghi rõ để không tự nhận
+  đã xong.
+- Đã tự kiểm thử THẬT qua Claude Browser + docker compose build lại `web` (không phải
+  mô tả suy diễn): bìa đơn (trang 1) mở ra spread đúng mô hình sách thật, bắt được
+  khung hình đang lật cho thấy trang cong thật (không phẳng) kèm vệt sáng dọc nếp cong
+  và bóng đổ tự nhiên lên trang bên dưới — đúng chất lượng đối chiếu với ảnh demo/
+  Heyzine người dùng gửi, không còn hiện tượng đứng hình/nhảy cứng ở lần lật đầu tiên
+  (đã thử lại nhiều lần, kể cả sau khi rebuild image Docker). Test qua mobile giả lập
+  375×812: single-page, chạm/click chuyển trang đúng. Build production
+  (`next build`) qua TypeScript sạch, SSR trang `/read/[permalink]` không lỗi.
+  Chạy lại `tenant_isolation.test.js` (13/13), `api_e2e.test.js` (14/14),
+  `p2_e2e.test.js` (16/16) trên stack Docker sau khi rebuild `web` — không hồi quy
+  (thay đổi lần này chỉ ở `apps/web`, không đụng API/DB/worker).
+- Giới hạn còn mở sau đợt sửa này: nút ép 1/2 trang thủ công chưa làm được (nêu trên);
+  chưa test trên thiết bị chạm thật (chỉ giả lập kích thước qua trình duyệt); chưa có
+  test tự động (Playwright) cho FE; `?page=N` deep-link vẫn chưa làm (đã ghi từ đợt
+  trước, không mở rộng phạm vi ngoài yêu cầu lần này).
+
+**Ghi nhận yêu cầu mới 17/09/2026 (chưa triển khai, chỉ mới đưa vào tài liệu)**: người
+dùng yêu cầu ghi lại 3 việc làm sau — chi tiết đầy đủ và câu hỏi mở ở PLAN.md mục 8,
+tham chiếu ngắn ở ROADMAP.md mục Backlog:
+- F15: chèn ảnh nền cho sách (chưa rõ phạm vi ảnh nền toàn trang đọc hay nền từng trang PDF).
+- F16: hai mức hiển thị Private (chỉ Creator xem, cần đăng nhập) và Publish (ai có link
+  cũng xem được) — đây là thay đổi MÔ HÌNH PHÂN QUYỀN mới, khác F05 (mật khẩu, vẫn public)
+  và khác draft hiện tại (không có link công khai) — rủi ro cao nếu hiểu sai ý người dùng,
+  PHẢI hỏi lại làm rõ trước khi đụng `books.status`/RLS/`public_get_book`.
+- F17: tham khảo props/events/slot của `ts1/flipbook-vue` (MIT, đã tra license) để bổ
+  sung zoom in/out cho reader hiện tại (`apps/web/src/components/FlipBook.tsx`, đang
+  dùng `react-pageflip`) — KHÔNG chuyển sang flipbook-vue (khác framework, xem ADR
+  P2-flip); chỉ lấy ý tưởng thiết kế API.
+
+Chưa bắt đầu: P3-P6, Git tag bản stable, và cả 3 mục F15/F16/F17 vừa ghi nhận ở trên.
 Điểm stable gần nhất: chưa có (P1+P2 xong nhưng chưa cắt tag).
 Handoff tài liệu: PLANNING-001 (draft); không coi là phần mềm có thể rollback.
 Bước tiếp theo: P3 theo ROADMAP.md (mật khẩu, download, replace/revision, embed, link share) —
 book_settings.password_hash đã có cột sẵn từ P1, cần thêm luồng nhập mật khẩu ở FE + kiểm tra ở
 `public_get_book`/`public_get_page_asset`; hoặc đóng các mục "chưa xong trong P2" ở trên nếu
-người dùng muốn cứng hoá P2 trước khi sang P3. Test tự động cho FE (Playwright) đáng cân nhắc
-trước khi làm thêm tương tác phức tạp hơn (P4: hyperlink overlay, media).
+người dùng muốn cứng hoá P2 trước khi sang P3. Trước khi làm F16 cần hỏi lại người dùng để
+chốt đúng ý (xem PLAN.md mục 8). Test tự động cho FE (Playwright) đáng cân nhắc trước khi
+làm thêm tương tác phức tạp hơn (P4: hyperlink overlay, media, hoặc F17 zoom).
 
 ## Cách cập nhật
 Sau mỗi đợt công việc, ghi: đã đổi gì, quyết định/giả định mới, test nào thực sự chạy, kết quả/lỗi, commit và bước kế tiếp.

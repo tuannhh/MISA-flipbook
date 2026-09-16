@@ -37,3 +37,7 @@ Thumbs.db
 
 # Docker local volumes
 infra/docker/volumes/
+
+# Tu dong sinh boi `next dev` (Next.js 16) - khong phai tai lieu du an
+apps/web/AGENTS.md
+apps/web/CLAUDE.md

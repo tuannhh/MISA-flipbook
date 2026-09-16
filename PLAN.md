@@ -76,3 +76,14 @@ Giới hạn đề xuất để benchmark: 200 MB/PDF, 500 trang/PDF, 20 Creator
 Theo chỉ đạo bổ sung: làm Docker trước; server MISA do DevOps tính toán khi deploy thật, không chặn phát triển. Docker dùng Linux containers (trên Windows qua WSL2). SSO để điểm tích hợp, pilot dùng tài khoản do Admin cấp. Không có đăng ký công khai mặc định.
 
 Tắt download ngăn cấp PDF gốc; không ngăn người xem chụp màn hình hoặc lưu nội dung đã hiển thị. Không quảng bá như DRM.
+
+## 8. Yêu cầu bổ sung ghi nhận 17/09/2026 (backlog tương lai, chưa ước lượng/chưa vào phạm vi hiện tại)
+Người dùng yêu cầu ghi nhận để làm sau, chưa thiết kế chi tiết, chưa cam kết mốc P nào ở ROADMAP.md:
+
+| ID | Yêu cầu | Ghi chú / câu hỏi mở cần làm rõ trước khi thiết kế |
+|---|---|---|
+| F15 | Chèn ảnh nền cho sách | Chưa rõ phạm vi: ảnh nền toàn trang đọc (đằng sau/xung quanh khung flipbook) hay nền cho từng trang PDF cụ thể; cần hỏi người dùng trước khi làm. Ảnh hưởng tới `book_settings` (thêm cột) và FE reader (`apps/web/src/components/FlipBook.tsx`, `globals.css`). |
+| F16 | Hai mức hiển thị: **Private** (chỉ Creator/chủ sách xem được, cần đăng nhập) và **Publish** (ai có link đều xem được, đúng hành vi public reader hiện tại) | Khác với F05 (mật khẩu xem — sách vẫn PUBLIC, chỉ chặn bằng mật khẩu) và khác với trạng thái "draft" hiện có (sách chưa publish, chỉ Creator xem qua dashboard, KHÔNG có link công khai nào cả). "Private" có vẻ là một trạng thái publish MỚI: có link cố định nhưng link đó vẫn đòi hỏi đăng nhập đúng chủ sở hữu mới xem được — cần người dùng xác nhận đúng ý này trước khi động vào `books.status`, `public_get_book`/`public_get_page_asset` (migration `0006_public_reader.sql`) và RLS liên quan, vì đây là thay đổi mô hình phân quyền, rủi ro cao nếu hiểu sai. |
+| F17 | Tham khảo `ts1/flipbook-vue` (MIT, xem đánh giá license ở phiên làm việc 16-17/09/2026) — props/events/slot props cho zoom in/out khi đọc, và rà soát các hook sự kiện lật trang | Không chuyển sang flipbook-vue (thư viện Vue, không tương thích trực tiếp React/Next.js đang dùng — xem MEMORYBANK.md phần ADR P2-flip, hiện đã dùng `react-pageflip`/StPageFlip MIT). Chỉ lấy Ý TƯỞNG API (cách đặt tên prop/event cho zoom, callback khi đổi trang) để bổ sung tính năng ZOOM còn thiếu trong `FlipBook.tsx` (đã ghi là gap ở MEMORYBANK.md) — cần kiểm tra `page-flip`/StPageFlip có hỗ trợ zoom sẵn hay phải tự thêm layer riêng trước khi ước lượng công sức. |
+
+Cả 3 mục trên CHƯA bắt đầu triển khai; cần làm rõ câu hỏi mở ở cột ghi chú (đặc biệt F16, vì đụng mô hình phân quyền) trước khi đưa vào ROADMAP.md backlog của một mốc P cụ thể.
