@@ -1,0 +1,11 @@
+{
+  "name": "@misa-flipbook/tests-integration",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "test:rls": "node tenant_isolation.test.js"
+  },
+  "dependencies": {
+    "pg": "8.23.0"
+  }
+}

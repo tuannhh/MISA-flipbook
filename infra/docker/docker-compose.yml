@@ -1,0 +1,46 @@
+name: misa-flipbook
+
+# Giai doan P1: chi postgres + redis, du de chay migration va test cach ly tenant.
+# api/dispatcher/pdf-worker/web/proxy se duoc them khi co Dockerfile that (khong tao
+# service tro toi Dockerfile chua ton tai).
+#
+# DB/Redis KHONG expose ra ngoai may host trong cau hinh muc tieu (ARCHITECTURE.md
+# muc 8: "Chi proxy mo cong public; DB/Redis/worker dung mang noi bo"). Cong duoc mo
+# o day (127.0.0.1 only) chi de phuc vu dev/test cuc bo tren Docker; khi co proxy that
+# se go bo phan "ports" nay.
+
+services:
+  postgres:
+    image: postgres:16.4
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-misa_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?can dat POSTGRES_PASSWORD trong .env}
+      POSTGRES_DB: ${POSTGRES_DB:-misa_flipbook}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pgdata:
+  redisdata:

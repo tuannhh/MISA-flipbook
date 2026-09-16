@@ -65,12 +65,36 @@ Chưa xong trong P0 (không được coi là hoàn tất): PoC audio/video (thi�
 internal link ra số trang cụ thể, đo trên thiết bị mobile thật, PDF scan ảnh bitmap thật,
 PDF dung lượng lớn thật (gần 200 MB), review license bundle nhị phân PDFium khi đóng Docker image.
 
-Chưa bắt đầu: P1 (schema/auth/tenant/Docker Compose thật), P2-P6, kiểm thử tích hợp, triển khai,
-Git tag, backup/restore.
+**P1 giai đoạn 1 (schema + cách ly tenant) — hoàn tất và có bằng chứng chạy thật**:
+- Docker Compose (infra/docker) chạy Postgres 16.4 + Redis 7.4 thật, có healthcheck; đã thử
+  cold start sạch (`docker compose down -v && up -d`) thành công, healthy trong ~9 giây.
+- Schema Postgres đầy đủ theo ARCHITECTURE.md mục 3 (infra/migrations/0002_core_schema.sql):
+  tenants/users/memberships/books/revisions/book_settings/assets/jobs/audit_logs/
+  analytics_events/daily_stats, khóa ngoại ghép tenant_id để chặn liên kết chéo tenant.
+- RLS thật (infra/migrations/0003_rls_policies.sql): role runtime `app_user` KHÔNG superuser/
+  BYPASSRLS; mọi bảng có dữ liệu tenant đều FORCE ROW LEVEL SECURITY. **Sửa 1 lỗi thiết kế phát
+  hiện khi viết test**: policy ban đầu cho đọc theo toàn tenant, vi phạm PLAN.md mục 3 ("Creator
+  khác dù cùng tenant chỉ xem qua link như Viewer") — đã sửa thành owner-scoped (Creator chỉ thấy
+  sách/revision/asset/job/thống kê CỦA CHÍNH MÌNH, không phải toàn tenant); Admin bypass riêng.
+- Migration runner (infra/migrations/run.js) tự tạo/đồng bộ role `app_user`, idempotent (test
+  chạy 2 lần liên tiếp không lỗi).
+- **Test tích hợp thật trên Postgres thật** (tests/integration/tenant_isolation.test.js):
+  13/13 assertion PASS, chạy lặp lại 2 lần đều pass. Kiểm chứng: Creator A chỉ thấy sách của
+  mình (kể cả cùng tenant với Creator khác); không đọc/sửa được sách tenant khác; INSERT giả
+  mạo tenant_id/owner_id bị RLS từ chối bằng lỗi rõ ràng (không âm thầm 0 dòng); Admin đọc được
+  xuyên tenant; session chưa xác thực không thấy gì. Đây chính là điều kiện đi tiếp của P1 trong
+  ROADMAP.md.
+
+Chưa xong trong P1 (không được coi là hoàn tất): API NestJS thật (auth JWT, endpoints, middleware
+gắn `SET LOCAL app.*` mỗi transaction), storage adapter local/S3, dispatcher/outbox, CI, Dockerfile
+cho api/dispatcher/pdf-worker/web/proxy (docker-compose hiện chỉ có postgres+redis), test tải/pool
+connection dưới concurrency thật.
+
+Chưa bắt đầu: P2-P6, backup/restore thật, Git tag.
 Điểm stable gần nhất: chưa có.
 Handoff tài liệu: PLANNING-001 (draft); không coi là phần mềm có thể rollback.
-Bước tiếp theo: hoàn thiện phần P0 còn thiếu ở trên (cần MISA cấp corpus PDF thật) song song
-bắt đầu P1 — schema Postgres, auth/tenant, Docker Compose khung.
+Bước tiếp theo: dựng NestJS API (auth, tenant middleware dùng đúng context Postgres đã kiểm
+chứng ở trên), storage adapter, rồi Dockerize toàn bộ services còn lại.
 
 ## Cách cập nhật
 Sau mỗi đợt công việc, ghi: đã đổi gì, quyết định/giả định mới, test nào thực sự chạy, kết quả/lỗi, commit và bước kế tiếp.

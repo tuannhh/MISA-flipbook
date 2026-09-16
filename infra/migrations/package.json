@@ -1,0 +1,12 @@
+{
+  "name": "@misa-flipbook/migrations",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Migration runner cho Postgres cua MISA Flipbook. Chi dung SQL thuan, khong ORM, de kiem soat RLS.",
+  "scripts": {
+    "migrate": "node run.js"
+  },
+  "dependencies": {
+    "pg": "8.23.0"
+  }
+}
