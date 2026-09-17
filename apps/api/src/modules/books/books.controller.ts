@@ -4,6 +4,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
   Inject,
   NotFoundException,
@@ -38,19 +39,37 @@ const PDF_MAX_BYTES = Number(process.env.PDF_MAX_BYTES ?? 200 * 1024 * 1024);
 const PIPELINE_VERSION = process.env.PDF_PIPELINE_VERSION ?? "v1";
 const MAX_SLUG_RETRIES = 5;
 
+// F15: anh nen cho sach (backdrop, khac han page_image/thumbnail von do PDF-worker
+// sinh ra) - gioi han rieng, nho hon PDF vi chi la 1 anh trang tri.
+const BACKGROUND_MAX_BYTES = Number(process.env.BOOK_BACKGROUND_MAX_BYTES ?? 8 * 1024 * 1024);
+const BACKGROUND_SIGNATURES: Array<{ contentType: string; check: (buf: Buffer) => boolean }> = [
+  { contentType: "image/png", check: (b) => b.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) },
+  { contentType: "image/jpeg", check: (b) => b.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff])) },
+  { contentType: "image/webp", check: (b) => b.subarray(0, 4).toString("ascii") === "RIFF" && b.subarray(8, 12).toString("ascii") === "WEBP" },
+];
+
 // coverAssetId: uu tien thumbnail Creator tu chon (book_settings.thumbnail_asset_id),
 // khong thi lay thumbnail trang dau cua revision DANG PUBLISH (chua publish thi
 // chua co anh bia cong khai - dashboard hien placeholder, tranh lo anh cua revision
 // chua duyet ra ngoai qua duong public asset).
+// F12: dung luong (tong bytes moi revision cua sach) + luot mo/luot xem trang 30 ngay gan
+// nhat (SUM tren daily_stats, da co RLS rieng gioi han dung sach cua chinh minh - xem
+// 0003_rls_policies.sql). Subquery tuong quan, chap nhan duoc o quy mo PoC (danh sach sach
+// cua 1 Creator khong lon).
 const BOOK_SELECT_COLUMNS = `
   b.id, b.title, b.permalink_slug, b.permalink_suffix, b.status, b.published_revision_id,
-  b.created_at, b.updated_at,
+  b.created_at, b.updated_at, b.published_at,
   COALESCE(
     bs.thumbnail_asset_id,
     (SELECT a.id FROM assets a
      WHERE a.book_id = b.id AND a.revision_id = b.published_revision_id AND a.kind = 'thumbnail'
      ORDER BY a.object_key LIMIT 1)
-  ) AS cover_asset_id
+  ) AS cover_asset_id,
+  (SELECT COALESCE(SUM(a.bytes), 0) FROM assets a WHERE a.book_id = b.id) AS storage_bytes,
+  (SELECT COALESCE(SUM(ds.opens), 0) FROM daily_stats ds
+   WHERE ds.book_id = b.id AND ds.stat_date >= CURRENT_DATE - INTERVAL '30 days') AS opens_30d,
+  (SELECT COALESCE(SUM(ds.page_views), 0) FROM daily_stats ds
+   WHERE ds.book_id = b.id AND ds.stat_date >= CURRENT_DATE - INTERVAL '30 days') AS page_views_30d
 `;
 
 @Controller("books")
@@ -63,9 +82,11 @@ export class BooksController {
   @Get()
   async list(@Req() req: AuthedRequest) {
     // RLS (books_owner_read) da gioi han chi sach cua chinh nguoi goi trong tenant nay.
+    // deleted_at: sach bi Admin xoa mem khong con hien trong danh sach cua Creator nua.
     const { rows } = await req.dbClient.query(
       `SELECT ${BOOK_SELECT_COLUMNS} FROM books b
        LEFT JOIN book_settings bs ON bs.book_id = b.id
+       WHERE b.deleted_at IS NULL
        ORDER BY b.created_at DESC`
     );
     return rows;
@@ -107,7 +128,7 @@ export class BooksController {
     const { rows } = await req.dbClient.query(
       `SELECT ${BOOK_SELECT_COLUMNS} FROM books b
        LEFT JOIN book_settings bs ON bs.book_id = b.id
-       WHERE b.id = $1`,
+       WHERE b.id = $1 AND b.deleted_at IS NULL`,
       [id]
     );
     if (rows.length === 0) {
@@ -282,14 +303,37 @@ export class BooksController {
         `Revision dang o trang thai '${revRes.rows[0].state}', chi publish duoc revision 'ready'.`
       );
     }
+    // published_at: CHI dat lan dau tien (COALESCE) - endpoint nay cung duoc goi lai khi
+    // republish/rollback sang revision khac, khong duoc lam mat "ngay dang" ban dau.
     const updateRes = await req.dbClient.query(
-      `UPDATE books SET status = 'published', published_revision_id = $1 WHERE id = $2 RETURNING id`,
+      `UPDATE books SET status = 'published', published_revision_id = $1, published_at = COALESCE(published_at, now())
+       WHERE id = $2 RETURNING id`,
       [dto.revisionId, bookId]
     );
     if (updateRes.rowCount === 0) {
       throw new NotFoundException("Khong tim thay sach.");
     }
     return this.getOne(req, bookId);
+  }
+
+  /** F12: luot mo/luot xem trang THEO NGAY (khac tong 30 ngay o BOOK_SELECT_COLUMNS,
+   * dung de ve bang/bieu do chi tiet). RLS (daily_stats_owner_all) da tu gioi han dung
+   * sach cua chinh Creator nay - khong can WHERE book_id o day cung an toan, nhung viet
+   * ro cho de doc va tranh quet nham sach khac neu RLS bi tat nham trong tuong lai. */
+  @Get(":id/stats")
+  async getDailyStats(@Req() req: AuthedRequest, @Param("id") bookId: string, @Query("days") daysQuery?: string) {
+    const bookRes = await req.dbClient.query(`SELECT id FROM books WHERE id = $1`, [bookId]);
+    if (bookRes.rowCount === 0) {
+      throw new NotFoundException("Khong tim thay sach.");
+    }
+    const days = Math.min(90, Math.max(1, Number(daysQuery) || 30));
+    const { rows } = await req.dbClient.query(
+      `SELECT stat_date, opens, page_views FROM daily_stats
+       WHERE book_id = $1 AND stat_date >= CURRENT_DATE - ($2 || ' days')::interval
+       ORDER BY stat_date ASC`,
+      [bookId, days]
+    );
+    return rows;
   }
 
   @Get(":id/settings")
@@ -299,11 +343,103 @@ export class BooksController {
       throw new NotFoundException("Khong tim thay sach.");
     }
     const { rows } = await req.dbClient.query(
-      `SELECT allow_download, thumbnail_asset_id, ga_id, (password_hash IS NOT NULL) AS has_password
+      `SELECT allow_download, thumbnail_asset_id, ga_id, (password_hash IS NOT NULL) AS has_password, visibility,
+              (background_object_key IS NOT NULL) AS has_background
        FROM book_settings WHERE book_id = $1`,
       [bookId]
     );
-    return rows[0] ?? { allow_download: false, thumbnail_asset_id: null, ga_id: null, has_password: false };
+    return (
+      rows[0] ?? {
+        allow_download: false,
+        thumbnail_asset_id: null,
+        ga_id: null,
+        has_password: false,
+        visibility: "public",
+        has_background: false,
+      }
+    );
+  }
+
+  /** F15: anh nen backdrop cho khung doc (khac han anh trang/thumbnail cua PDF). */
+  @Post(":id/background")
+  @UseInterceptors(FileInterceptor("file", { limits: { fileSize: BACKGROUND_MAX_BYTES } }))
+  async uploadBackground(
+    @Req() req: AuthedRequest,
+    @Param("id") bookId: string,
+    @UploadedFile() file?: Express.Multer.File
+  ) {
+    if (!file) {
+      throw new BadRequestException("Thieu file anh (field 'file').");
+    }
+    if (file.size > BACKGROUND_MAX_BYTES) {
+      throw new BadRequestException(`Anh vuot qua gioi han ${BACKGROUND_MAX_BYTES} bytes.`);
+    }
+    const signature = BACKGROUND_SIGNATURES.find((s) => s.check(file.buffer));
+    if (!signature) {
+      throw new BadRequestException("Anh nen chi ho tro PNG, JPEG hoac WebP.");
+    }
+
+    const bookRes = await req.dbClient.query("SELECT id FROM books WHERE id = $1", [bookId]);
+    if (bookRes.rowCount === 0) {
+      throw new NotFoundException("Khong tim thay sach.");
+    }
+
+    // Ten co dinh (khong theo revision) - moi lan upload GHI DE anh cu, dung 1 anh/sach.
+    const objectKey = `${req.tenantId}/${bookId}/background/original`;
+    await this.storage.saveBuffer(objectKey, file.buffer);
+
+    const { rows } = await req.dbClient.query(
+      `INSERT INTO book_settings (tenant_id, book_id, background_object_key, background_content_type)
+       VALUES ($1,$2,$3,$4)
+       ON CONFLICT (book_id) DO UPDATE SET
+         background_object_key = $3,
+         background_content_type = $4
+       RETURNING allow_download, thumbnail_asset_id, ga_id, (password_hash IS NOT NULL) AS has_password, visibility,
+                 (background_object_key IS NOT NULL) AS has_background`,
+      [req.tenantId, bookId, objectKey, signature.contentType]
+    );
+    return rows[0];
+  }
+
+  @Get(":id/background")
+  async getBackground(@Req() req: AuthedRequest, @Param("id") bookId: string, @Res({ passthrough: true }) res: Response) {
+    const { rows } = await req.dbClient.query(
+      `SELECT bs.background_object_key, bs.background_content_type
+       FROM books b JOIN book_settings bs ON bs.book_id = b.id
+       WHERE b.id = $1`,
+      [bookId]
+    );
+    if (rows.length === 0 || !rows[0].background_object_key) {
+      throw new NotFoundException("Sach nay chua co anh nen.");
+    }
+    res.setHeader("Content-Type", rows[0].background_content_type);
+    res.setHeader("Cache-Control", "private, max-age=300");
+    return new StreamableFile(this.storage.createReadStream(rows[0].background_object_key));
+  }
+
+  @Delete(":id/background")
+  async removeBackground(@Req() req: AuthedRequest, @Param("id") bookId: string) {
+    const bookRes = await req.dbClient.query("SELECT id FROM books WHERE id = $1", [bookId]);
+    if (bookRes.rowCount === 0) {
+      throw new NotFoundException("Khong tim thay sach.");
+    }
+    const { rows } = await req.dbClient.query(
+      `UPDATE book_settings SET background_object_key = NULL, background_content_type = NULL
+       WHERE book_id = $1
+       RETURNING allow_download, thumbnail_asset_id, ga_id, (password_hash IS NOT NULL) AS has_password, visibility,
+                 (background_object_key IS NOT NULL) AS has_background`,
+      [bookId]
+    );
+    return (
+      rows[0] ?? {
+        allow_download: false,
+        thumbnail_asset_id: null,
+        ga_id: null,
+        has_password: false,
+        visibility: "public",
+        has_background: false,
+      }
+    );
   }
 
   @Put(":id/settings")
@@ -332,9 +468,17 @@ export class BooksController {
     // access_epoch tang moi khi mat khau doi/xoa - vo hieu hoa ngay moi access token da
     // phat qua verify-password truoc do (F05: doi mat khau phai buoc nguoi xem nhap lai).
     const bumpEpoch = removePassword || newPasswordHash !== null;
+    // F06: gaId phan biet 3 trang thai (khong the dung COALESCE nhu cac field khac vi
+    // "gui null" phai XOA duoc gia tri, khac voi "khong gui field" = giu nguyen). PHAI
+    // kiem tra tren req.body THO (JSON goc), KHONG tren instance `dto`: voi target ES2022,
+    // khai bao field class (vd "gaId?: string") tu dong tao own-property `undefined` cho
+    // MOI instance bat ke client co gui hay khong - hasOwnProperty(dto, "gaId") luon true,
+    // se xoa nham gia tri cu (da phat hien qua test that, khong phai doan truoc).
+    const gaIdProvided = Object.prototype.hasOwnProperty.call(req.body ?? {}, "gaId");
+    const gaIdValue = gaIdProvided ? dto.gaId ?? null : null;
     const { rows } = await req.dbClient.query(
-      `INSERT INTO book_settings (tenant_id, book_id, allow_download, thumbnail_asset_id, password_hash, access_epoch)
-       VALUES ($1,$2, COALESCE($3, false), $4, $5, CASE WHEN $6 THEN 1 ELSE 0 END)
+      `INSERT INTO book_settings (tenant_id, book_id, allow_download, thumbnail_asset_id, password_hash, access_epoch, visibility, ga_id)
+       VALUES ($1,$2, COALESCE($3, false), $4, $5, CASE WHEN $6 THEN 1 ELSE 0 END, COALESCE($8, 'public'), $9)
        ON CONFLICT (book_id) DO UPDATE SET
          allow_download = COALESCE($3, book_settings.allow_download),
          thumbnail_asset_id = COALESCE($4, book_settings.thumbnail_asset_id),
@@ -345,8 +489,11 @@ export class BooksController {
          END,
          access_epoch = CASE WHEN $6::boolean THEN book_settings.access_epoch + 1 ELSE book_settings.access_epoch END,
          failed_attempts = CASE WHEN $6::boolean THEN 0 ELSE book_settings.failed_attempts END,
-         locked_until = CASE WHEN $6::boolean THEN NULL ELSE book_settings.locked_until END
-       RETURNING allow_download, thumbnail_asset_id, ga_id, (password_hash IS NOT NULL) AS has_password`,
+         locked_until = CASE WHEN $6::boolean THEN NULL ELSE book_settings.locked_until END,
+         visibility = COALESCE($8, book_settings.visibility),
+         ga_id = CASE WHEN $10::boolean THEN $9 ELSE book_settings.ga_id END
+       RETURNING allow_download, thumbnail_asset_id, ga_id, (password_hash IS NOT NULL) AS has_password, visibility,
+                 (background_object_key IS NOT NULL) AS has_background`,
       [
         req.tenantId,
         bookId,
@@ -355,6 +502,9 @@ export class BooksController {
         newPasswordHash,
         bumpEpoch,
         removePassword,
+        dto.visibility ?? null,
+        gaIdValue,
+        gaIdProvided,
       ]
     );
     return rows[0];

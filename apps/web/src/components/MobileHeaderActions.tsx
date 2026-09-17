@@ -8,9 +8,16 @@ import { XSettingsDialog } from "@/components/xds/XSettingsDialog";
 // Cum hanh dong ben phai MobileTopBar (toi da 2 nut theo mobile-native-app.md):
 // Cai dat (gear) + menu tai khoan (Dang xuat). Dung chung cho dashboard + chi
 // tiet sach o layout mobile.
-export function MobileHeaderActions({ onLogout }: { onLogout: () => void }) {
+export function MobileHeaderActions({ onLogout, isAdmin }: { onLogout: () => void; isAdmin?: boolean }) {
   const t = useTranslations("common");
   const [settingsOpen, setSettingsOpen] = useState(false);
+
+  const menuItems = isAdmin
+    ? [
+        { key: "admin", label: t("adminDashboard"), icon: "settings" as const, href: "/admin" },
+        { key: "logout", label: t("logout"), icon: "logout" as const, danger: true, onSelect: onLogout },
+      ]
+    : [{ key: "logout", label: t("logout"), icon: "logout" as const, danger: true, onSelect: onLogout }];
 
   return (
     <>
@@ -23,7 +30,7 @@ export function MobileHeaderActions({ onLogout }: { onLogout: () => void }) {
       >
         <XIcon name="settings" size={22} />
       </button>
-      <XDropdownMenu items={[{ key: "logout", label: t("logout"), icon: "logout", danger: true, onSelect: onLogout }]}>
+      <XDropdownMenu items={menuItems}>
         {({ toggle }) => (
           <button
             type="button"

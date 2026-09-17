@@ -12,6 +12,10 @@ COPY messages ./messages
 # trong repo nay chi can ENV luc runtime.
 ARG NEXT_PUBLIC_API_BASE_URL=http://localhost:3000
 ENV NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL}
+# P6: Facebook App ID that (developers.facebook.com) de dung Share Dialog qua FB SDK -
+# de rong = fallback link sharer.php (van hoat dong, khong can app). Xem lib/facebookShare.ts.
+ARG NEXT_PUBLIC_FACEBOOK_APP_ID=
+ENV NEXT_PUBLIC_FACEBOOK_APP_ID=${NEXT_PUBLIC_FACEBOOK_APP_ID}
 RUN npm run build
 
 FROM node:22-slim

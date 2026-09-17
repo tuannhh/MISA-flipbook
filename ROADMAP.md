@@ -59,6 +59,16 @@ Theo chỉ đạo người dùng: ưu tiên bản chạy Docker; DevOps tự siz
 
 P6 có thể khảo sát từ P0, nhưng không khóa tiến độ đọc sách vào thời gian Meta/LinkedIn xét duyệt. Mốc v1.0-core đạt P5 phải ghi rõ social trực tiếp chưa hoàn tất nếu P6 còn mở; không ghi toàn bộ yêu cầu đã xong.
 
+**P6 — tiến độ (2026-09-17, ưu tiên Facebook trước theo chỉ đạo người dùng)**: đã đổi
+nút "Chia sẻ Facebook" từ link `sharer.php` tĩnh sang gọi Facebook Share Dialog thật qua
+Facebook JS SDK (`apps/web/src/lib/facebookShare.ts`), tự fallback về link cũ khi chưa
+cấu hình App ID hoặc SDK lỗi — không phá luồng chia sẻ hiện có. Đã build lại + test qua
+Claude Browser xác nhận nhánh fallback chạy đúng. **Còn nghẽn thật**: cần người dùng tự
+tạo Facebook App tại developers.facebook.com (AI không được tạo tài khoản/app thay), điền
+`WEB_PUBLIC_FACEBOOK_APP_ID` vào `infra/docker/.env` rồi rebuild `web`, mới kiểm chứng
+được nhánh Share Dialog thật — xem chi tiết ở MEMORYBANK.md mục "P6 — Social API nâng
+cao". LinkedIn/Instagram chưa bắt đầu.
+
 ## Backlog ưu tiên
 P0: thu thập PDF mẫu → benchmark PDFium/pypdf → annotation/media inventory → thử hiệu ứng + JPEG fallback trên máy yếu → quyết định ADR.
 P1: schema/permission tests trước → API auth → upload private → dispatcher/outbox → worker resource limits.
@@ -67,13 +77,134 @@ P3: protection end-to-end → replace/publish atomic → download guard → embe
 P4: dashboard/events → media support đã xác minh → Admin operations/audit.
 P5: fix lỗi theo severity → load/restore → staging MISA → nghiệm thu → handoff ổn định.
 
-Backlog chưa gán mốc P cụ thể (ghi nhận 17/09/2026, xem PLAN.md mục 8 để biết chi tiết
-và câu hỏi mở cần làm rõ trước khi ước lượng): F15 ảnh nền cho sách; F16 công tắc
-Publish ⇄ Private trên sách đã publish (giống "chỉ mình tôi"/YouTube Private/Google
-Drive Restricted — đã chốt đủ rõ với người dùng để thiết kế: Admin luôn xem được +
-ghi audit, Private ưu tiên cao hơn mật khẩu F05 — khả năng liên quan tới P3 vì cùng
-nhóm "quản lý xuất bản"); F17 tham khảo props/events zoom in/out của flipbook-vue để bổ sung zoom cho reader (`apps/web/src/components/
-FlipBook.tsx`), khả năng liên quan tới P2 polish hoặc P4 (tương tác đọc).
+**F15 ảnh nền cho khung đọc — ĐÃ XONG (2026-09-17)**, xem chi tiết ở MEMORYBANK.md: người
+dùng xác nhận phạm vi là 1 ảnh nền/sách cho cả khung đọc (không phải nền riêng từng trang
+PDF). Backend: cột mới trong `book_settings` + endpoint upload/xem/xóa (owner) và endpoint
+công khai (dùng lại đúng cơ chế chặn Private/mật khẩu của F16). Frontend: khối "Background
+image" trong Cài đặt + hiển thị nền phủ gradient tối trong reader. Test tay qua Docker thật
++ không hồi quy 5 bộ test cũ (88/88).
+
+**F16 công tắc Publish ⇄ Private trên sách đã publish — ĐÃ XONG (2026-09-17)**, xem chi tiết
+đầy đủ ở MEMORYBANK.md: backend (migration + `public_get_book`/`resolveActor`/audit log qua
+SECURITY DEFINER) test tích hợp 12/12 PASS, frontend (switch trên trang chi tiết sách + màn
+chặn riêng tư trên reader công khai, 2 ngôn ngữ) đã test tay qua Docker thật. Không hồi quy
+3 bộ test cũ (14/14 + 16/16 + 33/33).
+
+**F17 zoom in/out cho reader — ĐÃ XONG (2026-09-17)**, xem chi tiết ở MEMORYBANK.md: tự làm
+bằng CSS transform (thư viện react-pageflip/StPageFlip không hỗ trợ zoom sẵn), có nút zoom
+1x-2.5x + kéo (pan) khi đang zoom, đã test tay qua Docker thật (đo trực tiếp DOM + chụp màn
+hình xác nhận phóng to/kéo đúng). Còn 1 giới hạn nhỏ đã ghi nhận: tâm zoom canh theo tâm
+khung spread nên trang bìa đơn lẻ (đầu/cuối sách) có thể lệch nhiều hơn khi zoom lần đầu,
+cần kéo lại - chưa tối ưu riêng cho trường hợp này.
+
+**P4 — F10 Mức A (hyperlink URL ngoài + link nội bộ sang trang) — ĐÃ XONG (2026-09-17)**,
+xem chi tiết ở MEMORYBANK.md: backend đã có sẵn phần trích xuất link từ trước (P0), việc làm
+thêm là resolve `/Dest` (link nội bộ) ra số trang cụ thể (`services/pdf-worker/app/convert.py`)
++ dựng overlay bấm được trên FE (`FlipBook.tsx`, tính đúng vùng ảnh hiển thị kể cả khi trang
+bị xoay/lệch tỉ lệ). Test thật qua Docker + Claude Browser với `sample_vi_text.pdf` (link
+ngoài + link nội bộ về trang cuối), không hồi quy 88/88 test cũ. F10 Mức C (JS/Launch) sẽ
+báo cáo rõ là bỏ qua, không tự chạy. F06 (GA4), F12 (dashboard Creator), F13 (dashboard
+Admin) của P4 chưa làm — đang làm tiếp theo thứ tự đó.
+
+**P4 — F10 Mức B (audio/video) — TẠM HOÃN theo quyết định người dùng (2026-09-17)**: đã hỏi
+trực tiếp vì thiếu PDF mẫu thật có audio/video (điều kiện bắt buộc của PLAN.md trước khi coi
+Mức B là xong) — người dùng chọn "tạm hoãn Mức B, tập trung F06/F12/F13 trước". Không tự tạo
+file mẫu giả để "cho xong việc". Quay lại khi có file mẫu thật hoặc người dùng yêu cầu tiếp.
+
+**P4 — F06 (Google Analytics GA4) — ĐÃ XONG (2026-09-17)**, xem chi tiết ở MEMORYBANK.md:
+phát hiện 2 cột cần dùng (`book_settings.ga_id`, `tenants.default_ga_id`) đã có sẵn từ schema
+P1 nhưng chưa API nào dùng tới — chỉ cần nối dây validate + đọc/ghi + endpoint Admin mới
+(`PATCH /admin/tenants/:id`, trước đó chưa có cách sửa tenant sau khi tạo) + chèn script
+`gtag.js` cố định ở reader công khai (không nhận JavaScript tùy ý, chỉ 1 ID đã validate định
+dạng). Phát hiện + sửa 1 bug thật khi test (không phải đọc code đoán ra): field TS khai báo
+kiểu `gaId?: string` với target ES2022 luôn là own-property ngay cả khi client không gửi,
+làm sai logic phân biệt "giữ nguyên" vs "xóa" — đã sửa bằng cách kiểm tra `req.body` thô.
+Test thật qua Docker + script Node + Claude Browser (đặt/xóa/sửa GA4 qua cả API lẫn UI, xác
+nhận script gtag đúng ID ở `<head>` sau khi publish, vòng khép kín Dashboard→API→reader),
+không hồi quy 88/88 test cũ. Còn lại của P4: F12 (dashboard Creator), F13 (dashboard Admin).
+
+**P4 — F12 (dashboard Creator: danh sách/trạng thái/dung lượng/lượt mở-xem/lọc) — ĐÃ XONG
+(2026-09-17)**, xem chi tiết ở MEMORYBANK.md: phát hiện bảng `analytics_events`/`daily_stats`
++ RLS đã có sẵn từ schema P1 nhưng chưa dùng — chỉ cần 1 hàm SECURITY DEFINER mới
+(`public_record_book_event`, migration 0011) cho đường ghi công khai không đăng nhập, còn
+đường đọc của Creator dùng thẳng RLS có sẵn. Thêm `GET :id/stats`, `POST
+:permalink/events`, mở rộng danh sách sách trả kèm dung lượng/lượt mở/lượt xem 30 ngày. FE:
+port `XSelect` từ Vue sang React (đúng Ưu tiên 2 của skill XDS, không dùng `<select>` gốc) cho
+bộ lọc trạng thái + ô tìm theo tiêu đề trên dashboard, thêm card "Statistics" (dung lượng +
+30 ngày + bảng theo ngày) trên trang chi tiết sách. Phát hiện + sửa 1 bug thật khi test (không
+phải đọc code đoán ra): cột ngày trả nguyên `stat_date` dạng ISO datetime đầy đủ thay vì chỉ
+ngày — sửa ở FE, rebuild lại `web`. Test thật qua Docker + script Node + Claude Browser: tạo
+tenant/gán quyền creator cho tài khoản test qua API thật, lọc/tìm trên dashboard (kể cả
+trường hợp rỗng đúng `XEmptyState type="no-result"`), lật trang thật trên reader công khai và
+xác nhận `POST .../events` ghi đúng vào `daily_stats` (khớp số lần lật), card thống kê trên
+trang chi tiết hiển thị đúng số liệu thật — không hồi quy 88/88 test cũ. Còn lại của P4: F13
+(dashboard Admin).
+
+**P4 — F13 (dashboard Admin: tenant/tài khoản/sách/job lỗi/thống kê/audit log) — ĐÃ XONG
+(2026-09-17)**, xem chi tiết ở MEMORYBANK.md: mọi bảng nghiệp vụ đã có sẵn RLS `*_admin_all`
+từ P1, chỉ thiếu tầng API đọc xuyên tenant — thêm 6 endpoint GET mới (`tenants`, `users`,
+`books`, `jobs`, `stats`, `audit-logs`) + 2 endpoint đổi trạng thái (tạm ngưng tenant/khóa tài
+khoản, có ghi audit log). Phát hiện và sửa 1 bug chặn hoàn toàn đăng nhập Admin thuần (tài
+khoản không có membership tenant nào bị kẹt ở lỗi "không có tenant" vì FE bỏ qua
+`me.isSystemAdmin`) trước khi có thể làm tiếp — nếu không sửa, `admin@misa.local` sẵn có
+trong seed sẽ không bao giờ vào được `/admin`. Phát hiện + sửa 1 bug thật khi test (không
+phải đọc code đoán ra): dùng lại 1 tham số SQL (`$2`) cho 2 cột khác kiểu (`uuid` vs `text`)
+trong cùng câu `INSERT audit_logs` gây lỗi 500 khi bấm nút thật trên UI — Postgres suy luận
+kiểu tham số mâu thuẫn ngay lúc parse câu lệnh. Test thật qua Docker + Claude Browser: đăng
+nhập Admin thuần vào thẳng `/admin`, xem đúng dữ liệu thật (74 tenant/75 tài khoản/54 sách),
+tạm ngưng/kích hoạt lại 1 tenant và khóa/mở 1 tài khoản qua UI thật (bắt được lỗi 500 nêu
+trên, sửa, xác nhận lại thành công + audit log đúng), lọc job theo trạng thái, tìm kiếm
+sách, resize mobile 375×812 không vỡ layout — không hồi quy 88/88 test cũ.
+
+Đến đây P4 đã hoàn tất toàn bộ phạm vi ban đầu ("Hyperlink hoàn chỉnh, media trong phạm vi
+PoC, GA4, dashboard, Admin") trừ F10 Mức B (tạm hoãn, chờ file mẫu PDF thật có audio/video)
+và F10 Mức C (chủ động bỏ qua theo đúng PLAN.md, không tự nhận là đã làm).
+
+**F13-rút gọn (2026-09-17)**: người dùng phản hồi Admin dashboard "phức tạp quá" (Admin dùng
+không phải dân kỹ thuật) — rút Tổng quan còn 2 số (Số sách đã đăng + Lượt mở), bỏ hẳn các
+bảng Tenants/Accounts/Job lỗi/Audit log khỏi UI, thay bằng 1 danh sách sách đã đăng chi tiết
+(Tên sách/Người đăng/Ngày đăng/Số lượt xem, Xem-Sửa gộp 1 nút, Xóa mềm, tick chọn xóa hàng
+loạt, lọc khoảng ngày đăng, phân trang 10/20/50). Thêm migration `0012_book_publish_delete.sql`
+(cột `published_at` đặt chính xác lần đầu publish + `deleted_at` cho xóa mềm), endpoint mới
+`DELETE /admin/books/:id`, và port `XDatePicker` (Ưu tiên 2 theo skill XDS) cho bộ lọc khoảng
+ngày. Test thật qua Docker + Claude Browser: xóa đơn/xóa hàng loạt, đổi trang/đổi số dòng,
+lọc ngày, điều hướng Xem/Sửa sang trang chi tiết Creator qua `?tenantId=` override — không hồi
+quy 88/88 test cũ. Chi tiết đầy đủ xem MEMORYBANK.md mục "F13-rút gọn".
+
+**P5 — tiến độ (2026-09-17)**: bắt đầu chạy ma trận nghiệm thu bên dưới. Đã PASS bằng test
+thật (xem chi tiết MEMORYBANK.md mục "P5 — UAT và phát hành"): Jobs (Redis restart giữa job,
+tự phục hồi không cần can thiệp), Giới hạn (PDF mã hoá/hỏng không crash, vượt dung lượng trả
+413), Quyền (chặn dò thống kê chéo tenant), Replace (publish đồng thời vẫn nhất quán), Restore
+(backup DB + storage khôi phục đúng vào môi trường tách biệt, đối chiếu row-count và checksum
+khớp 100%), Mobile (giả lập qua trình duyệt: Login/Admin/Chi tiết sách/Reader ở 375×812 và
+812×375 không vỡ layout, copy link/mã nhúng hoạt động thật). Ghi nhận thêm 1 khoảng trống thật
+(không phải lỗ hổng): endpoint tải PDF công khai chưa hỗ trợ HTTP Range request. **Tìm và SỬA 2
+bug thật**: (1) FlipBook hiển thị trắng/cắt nội dung khi xoay ngang màn hình thấp — do
+`.flipbook-book` thiếu ràng buộc `max-height` khiến thư viện `react-pageflip` đo sai kích thước
+khung chứa; đã sửa trong `globals.css`. (2) Trang PDF có cờ `/Rotate` (90/180/270) hiển thị lộn
+ngược ~180° trong reader — do pipeline convert (`pdf-worker`) xoay chồng 2 lần (pypdfium2 đã tự
+xoay đúng khi render, nhưng code vẫn gửi rotation gốc cho frontend xoay thêm lần nữa); đã sửa
+trong `services/pdf-worker/app/convert.py`. Cả 2 bug đều đã rebuild container liên quan, test
+lại bằng mắt thật qua Claude Browser + chạy đủ bộ test hồi quy sau khi sửa (không hồi quy). Đã
+hoàn thành thêm các hạng mục: PDF/Tương tác (kiểm tra mắt `sample_rotated_mixed.pdf`/
+`sample_scanned_like.pdf`, đối chiếu PDF gốc), Performance (100 phiên đọc đồng thời thật,
+100/100 thành công, p95=601ms, API khoẻ sau tải), Embed (nhúng cross-origin thật qua origin
+khác hẳn, không bị chặn, tương tác bình thường trong iframe). Đã tạo bản DRAFT hồ sơ handoff
+đầy đủ [handoffs/HF-20260917-01.md](handoffs/HF-20260917-01.md) (theo mẫu HANDOFF.md) — chờ
+người dùng xác nhận "ổn rồi" để chuyển sang `stable` + commit + gán tag. Còn lại CHƯA làm:
+Mobile trên thiết bị thật, share-cancel (Social/GA), lịch backup định kỳ chính thức — điều kiện
+đi tiếp của P5 ("người dùng xác nhận bản ổn định và hồ sơ handoff đầy đủ") chưa đạt.
+
+**Quyết định 2026-09-17 (chỉ đạo người dùng)**: ưu tiên bản Docker chạy ổn định trước; việc
+deploy thật lên Google Cloud Run (hoặc bàn giao đội DevOps MISA tự triển khai trên hạ tầng công
+ty) để SAU, chỉ làm khi bản Docker đã được xác nhận ổn định. Đã cài sẵn `gcloud` CLI và đăng
+nhập (tài khoản tuanbui88vn@gmail.com, project dự kiến `prapplication-479309`) để sẵn sàng khi
+cần, nhưng CHƯA tạo bất kỳ tài nguyên GCP nào (tránh phát sinh phí khi chưa cần). Đã xác định
+qua đọc code: muốn chuyển sang Cloud Run cần thêm object storage (GCS/S3-compatible) cho CẢ 3
+service `apps/api` + `apps/worker-convert` + `services/pdf-worker` (hiện cả 3 đều đọc/ghi trực
+tiếp qua đường dẫn đĩa dùng chung `STORAGE_ROOT`, không qua API/object storage — phạm vi lớn
+hơn 1 adapter đơn thuần), cùng phương án Redis quản lý (Memorystore) hoặc VM riêng cho
+dispatcher/worker-convert. Việc này để dành cho khi thực sự bắt tay triển khai.
 
 ## Ma trận nghiệm thu bắt buộc
 | Nhóm | Tình huống và kết quả mong muốn |

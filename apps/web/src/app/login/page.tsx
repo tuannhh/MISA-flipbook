@@ -3,7 +3,7 @@ import { FormEvent, ReactNode, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { apiFetch, ApiError } from "@/lib/api";
-import { setToken, setTenantId } from "@/lib/auth";
+import { setToken, setTenantId, setIsAdmin } from "@/lib/auth";
 import type { Me, Membership } from "@/lib/types";
 import { XInput } from "@/components/xds/XInput";
 import { XButton } from "@/components/xds/XButton";
@@ -48,8 +48,15 @@ export default function LoginPage() {
       });
       setToken(accessToken);
       const me = await apiFetch<Me>("/me", { token: accessToken });
+      setIsAdmin(me.isSystemAdmin);
       const activeMemberships = me.memberships.filter((m) => m.status === "active");
       if (activeMemberships.length === 0) {
+        // F13: Admin he thong co the khong thuoc tenant nao ca (tai khoan quan tri
+        // thuan tuy) - vao thang /admin thay vi bao loi "khong co tenant".
+        if (me.isSystemAdmin) {
+          router.replace("/admin");
+          return;
+        }
         setError(t("errorNoTenant"));
         return;
       }

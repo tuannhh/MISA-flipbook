@@ -1,12 +1,12 @@
 "use client";
 import { ChangeEvent, useCallback, useEffect, useRef, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { useSession } from "@/lib/useSession";
 import { apiFetch, ApiError } from "@/lib/api";
 import { AuthImage } from "@/components/AuthImage";
-import type { Book, BookSettings, JobStatus, PreviewResult, Revision } from "@/lib/types";
+import type { Book, BookSettings, DailyStat, JobStatus, PreviewResult, Revision } from "@/lib/types";
 import { AppHeader } from "@/components/AppHeader";
 import { MobileTopBar } from "@/components/MobileTopBar";
 import { MobileHeaderActions } from "@/components/MobileHeaderActions";
@@ -17,10 +17,15 @@ import { XTag, type XTagColor } from "@/components/xds/XTag";
 import { XDialog } from "@/components/xds/XDialog";
 import { XIcon } from "@/components/xds/icons/XIcon";
 import { useToast } from "@/components/xds/XToast";
+import { formatBytes } from "@/lib/format";
 
 type BookWithCover = Book & { cover_asset_id: string | null };
 
 const JOB_POLL_MS = 1500;
+
+// F06: dinh dang GA4 Measurement ID chinh thuc cua Google - chan tu FE truoc khi goi
+// API (BE cung tu validate lai, khong tin rieng FE).
+const GA4_ID_RE = /^G-[A-Za-z0-9]{4,20}$/;
 
 // F09: iframe responsive, khong co kich thuoc co dinh - xem chu thich goc cua
 // ham nay truoc khi sua (giu nguyen logic tu P3, chi doi UI xung quanh).
@@ -33,11 +38,18 @@ function embedCode(publicPath: string): string {
 export default function BookDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
-  const { ready, token, tenantId, logout } = useSession();
+  const searchParams = useSearchParams();
+  // F13-simplification: mo tu danh sach sach cua Admin (?tenantId=... override trong
+  // useSession) - "Quay lai" phai ve /admin thay vi /dashboard (Admin co the khong
+  // thuoc tenant nao, /dashboard se khong dung duoc voi tai khoan thuan Admin).
+  const viaAdmin = searchParams.get("tenantId") !== null;
+  const backHref = viaAdmin ? "/admin" : "/dashboard";
+  const { ready, token, tenantId, isAdmin, logout } = useSession();
   const t = useTranslations("bookDetail");
   const tc = useTranslations("common");
   const toast = useToast();
   const [book, setBook] = useState<BookWithCover | null>(null);
+  const [dailyStats, setDailyStats] = useState<DailyStat[] | null>(null);
   const [revisions, setRevisions] = useState<Revision[] | null>(null);
   const [settings, setSettings] = useState<BookSettings | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -47,8 +59,13 @@ export default function BookDetailPage() {
   const [titleDraft, setTitleDraft] = useState("");
   const [passwordDraft, setPasswordDraft] = useState("");
   const [passwordBusy, setPasswordBusy] = useState(false);
+  const [gaIdDraft, setGaIdDraft] = useState("");
+  const [gaIdBusy, setGaIdBusy] = useState(false);
   const [publishTarget, setPublishTarget] = useState<string | null>(null);
+  const [backgroundBusy, setBackgroundBusy] = useState(false);
+  const [backgroundVersion, setBackgroundVersion] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const backgroundInputRef = useRef<HTMLInputElement>(null);
   const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const load = useCallback(async () => {
@@ -61,6 +78,9 @@ export default function BookDetailPage() {
       setRevisions(revs);
       const s = await apiFetch<BookSettings>(`/books/${id}/settings`, { token, tenantId });
       setSettings(s);
+      setGaIdDraft(s.ga_id ?? "");
+      const stats = await apiFetch<DailyStat[]>(`/books/${id}/stats?days=7`, { token, tenantId });
+      setDailyStats(stats);
     } catch (err) {
       toast("error", err instanceof ApiError ? err.message : t("errorLoad"));
     }
@@ -181,6 +201,25 @@ export default function BookDetailPage() {
     }
   }
 
+  // F16: cong tac Publish/Private tren sach DA publish (khac book.status). Bat Private
+  // la lop chan cao nhat - chi owner + Admin xem duoc qua CHINH permalink cu, mat khau
+  // F05 (neu co) bi bo qua trong luc Private dang bat (khong cong don 2 lop).
+  async function toggleVisibility(next: boolean) {
+    if (!token || !tenantId || !settings) return;
+    try {
+      const updated = await apiFetch<BookSettings>(`/books/${id}/settings`, {
+        method: "PUT",
+        token,
+        tenantId,
+        body: { visibility: next ? "private" : "public" },
+      });
+      setSettings(updated);
+      toast("success", next ? t("noticeVisibilityPrivate") : t("noticeVisibilityPublic"));
+    } catch (err) {
+      toast("error", err instanceof ApiError ? err.message : t("errorSettings"));
+    }
+  }
+
   async function savePassword() {
     if (!token || !tenantId || !passwordDraft.trim()) return;
     setPasswordBusy(true);
@@ -210,12 +249,82 @@ export default function BookDetailPage() {
     }
   }
 
+  // F06: GA4 Measurement ID rieng cho sach nay - gui null de xoa (quay lai dung mac
+  // dinh cua tenant, neu tenant co cau hinh).
+  async function saveGaId() {
+    if (!token || !tenantId) return;
+    const trimmed = gaIdDraft.trim();
+    if (trimmed && !GA4_ID_RE.test(trimmed)) {
+      toast("error", t("errorGaIdFormat"));
+      return;
+    }
+    setGaIdBusy(true);
+    try {
+      const updated = await apiFetch<BookSettings>(`/books/${id}/settings`, {
+        method: "PUT",
+        token,
+        tenantId,
+        body: { gaId: trimmed || null },
+      });
+      setSettings(updated);
+      setGaIdDraft(updated.ga_id ?? "");
+      toast("success", t("noticeGaIdSaved"));
+    } catch (err) {
+      toast("error", err instanceof ApiError ? err.message : t("errorSettings"));
+    } finally {
+      setGaIdBusy(false);
+    }
+  }
+
   async function copyEmbedCode(code: string) {
     try {
       await navigator.clipboard.writeText(code);
       toast("success", tc("copied"));
     } catch {
       toast("error", tc("copyFailed"));
+    }
+  }
+
+  // F15: anh nen backdrop cho khung doc (khac han noi dung/nen tung trang PDF, von da
+  // nam san trong file PDF nguoi dung upload - nguoi dung da xac nhan chi can 1 anh nen
+  // chung cho ca cuon sach, khong lam nen rieng tung trang).
+  async function uploadBackground(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file || !token || !tenantId) return;
+    setBackgroundBusy(true);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const updated = await apiFetch<BookSettings>(`/books/${id}/background`, {
+        method: "POST",
+        token,
+        tenantId,
+        body: form,
+        isForm: true,
+      });
+      setSettings(updated);
+      setBackgroundVersion((v) => v + 1);
+      toast("success", t("noticeBackgroundSet"));
+    } catch (err) {
+      toast("error", err instanceof ApiError ? err.message : t("errorUploadBackground"));
+    } finally {
+      setBackgroundBusy(false);
+      if (backgroundInputRef.current) backgroundInputRef.current.value = "";
+    }
+  }
+
+  async function removeBackground() {
+    if (!token || !tenantId) return;
+    setBackgroundBusy(true);
+    try {
+      const updated = await apiFetch<BookSettings>(`/books/${id}/background`, { method: "DELETE", token, tenantId });
+      setSettings(updated);
+      setBackgroundVersion((v) => v + 1);
+      toast("success", t("noticeBackgroundRemoved"));
+    } catch (err) {
+      toast("error", err instanceof ApiError ? err.message : t("errorRemoveBackground"));
+    } finally {
+      setBackgroundBusy(false);
     }
   }
 
@@ -274,6 +383,46 @@ export default function BookDetailPage() {
     </div>
   );
 
+  // F12: thong ke dung luong + luot mo/luot xem trang. Tong 30 ngay lay thang tu
+  // BOOK_SELECT_COLUMNS (da co san trong `book`); bang theo ngay goi rieng GET :id/stats.
+  const statsCard = (
+    <div className="rounded-lg bg-[var(--xds-bg)] p-4 shadow-[var(--xds-shadow-card)]">
+      <h2 className="mb-3 text-[16px] font-semibold leading-[22px] text-[var(--xds-text)]">{t("statsTitle")}</h2>
+      <div className="flex flex-wrap gap-4 text-[13px] text-[var(--xds-text-secondary)]">
+        <span>
+          {t("statsStorage")}: <strong className="text-[var(--xds-text)]">{formatBytes(book.storage_bytes)}</strong>
+        </span>
+        <span>
+          {t("statsOpens30d")}: <strong className="text-[var(--xds-text)]">{book.opens_30d}</strong>
+        </span>
+        <span>
+          {t("statsPageViews30d")}: <strong className="text-[var(--xds-text)]">{book.page_views_30d}</strong>
+        </span>
+      </div>
+      {dailyStats && dailyStats.length > 0 && (
+        <table className="mt-3 w-full text-[13px]">
+          <thead>
+            <tr className="border-b border-[var(--xds-border-light)] text-left text-[var(--xds-text-secondary)]">
+              <th className="py-1 font-medium">{t("statsDateCol")}</th>
+              <th className="py-1 font-medium">{t("statsOpensCol")}</th>
+              <th className="py-1 font-medium">{t("statsPageViewsCol")}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {dailyStats.map((d) => (
+              <tr key={d.stat_date} className="border-b border-[var(--xds-border-light)] last:border-b-0">
+                <td className="py-1 text-[var(--xds-text)]">{d.stat_date.slice(0, 10)}</td>
+                <td className="py-1 text-[var(--xds-text)]">{d.opens}</td>
+                <td className="py-1 text-[var(--xds-text)]">{d.page_views}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {dailyStats && dailyStats.length === 0 && <p className="mt-2 text-[13px] text-[var(--xds-text-secondary)]">{t("statsNoData")}</p>}
+    </div>
+  );
+
   const uploadCard = (
     <div className="rounded-lg bg-[var(--xds-bg)] p-4 shadow-[var(--xds-shadow-card)]">
       <h2 className="mb-3 text-[16px] font-semibold leading-[22px] text-[var(--xds-text)]">{t("uploadTitle")}</h2>
@@ -292,6 +441,16 @@ export default function BookDetailPage() {
     <div className="rounded-lg bg-[var(--xds-bg)] p-4 shadow-[var(--xds-shadow-card)]">
       <h2 className="mb-3 text-[16px] font-semibold leading-[22px] text-[var(--xds-text)]">{t("settingsTitle")}</h2>
       <XSwitch checked={settings?.allow_download ?? false} onChange={toggleAllowDownload} label={t("allowDownloadLabel")} />
+
+      {book.status === "published" && (
+        <div className="mt-5 border-t border-[var(--xds-border-light)] pt-4">
+          <label className="mb-1 block text-[13px] font-medium text-[var(--xds-text-secondary)]">{t("visibilityTitle")}</label>
+          <p className="mb-2 text-[13px] text-[var(--xds-text-secondary)]">
+            {settings?.visibility === "private" ? t("visibilityPrivateNote") : t("visibilityPublicNote")}
+          </p>
+          <XSwitch checked={settings?.visibility === "private"} onChange={toggleVisibility} label={t("visibilityLabel")} />
+        </div>
+      )}
 
       <div className="mt-5 border-t border-[var(--xds-border-light)] pt-4">
         <label className="mb-1 block text-[13px] font-medium text-[var(--xds-text-secondary)]">{t("passwordSectionTitle")}</label>
@@ -312,6 +471,53 @@ export default function BookDetailPage() {
               {t("removePassword")}
             </XButton>
           )}
+        </div>
+      </div>
+
+      <div className="mt-5 border-t border-[var(--xds-border-light)] pt-4">
+        <label className="mb-1 block text-[13px] font-medium text-[var(--xds-text-secondary)]">{t("backgroundSectionTitle")}</label>
+        <p className="mb-2 text-[13px] text-[var(--xds-text-secondary)]">
+          {settings?.has_background ? t("backgroundHasNote") : t("backgroundNoneNote")}
+        </p>
+        {settings?.has_background && token && tenantId && (
+          <AuthImage
+            path={`/books/${id}/background?v=${backgroundVersion}`}
+            token={token}
+            tenantId={tenantId}
+            alt={t("backgroundSectionTitle")}
+            className="mb-2 h-24 w-40 rounded-lg object-cover shadow-[var(--xds-shadow-card)]"
+          />
+        )}
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            ref={backgroundInputRef}
+            type="file"
+            accept="image/png,image/jpeg,image/webp"
+            onChange={uploadBackground}
+            disabled={backgroundBusy}
+            className="text-[13px]"
+          />
+          {settings?.has_background && (
+            <XButton variant="danger" onClick={removeBackground} loading={backgroundBusy}>
+              {t("removeBackground")}
+            </XButton>
+          )}
+        </div>
+      </div>
+
+      <div className="mt-5 border-t border-[var(--xds-border-light)] pt-4">
+        <label className="mb-1 block text-[13px] font-medium text-[var(--xds-text-secondary)]">{t("ga4SectionTitle")}</label>
+        <p className="mb-2 text-[13px] text-[var(--xds-text-secondary)]">{t("ga4SectionNote")}</p>
+        <div className="flex flex-wrap gap-2">
+          <XInput
+            value={gaIdDraft}
+            onChange={(e) => setGaIdDraft(e.target.value)}
+            placeholder="G-XXXXXXXXXX"
+            containerClassName="flex-1 min-w-[200px]"
+          />
+          <XButton variant="neutral" onClick={saveGaId} loading={gaIdBusy} disabled={gaIdDraft.trim() === (settings?.ga_id ?? "")}>
+            {tc("save")}
+          </XButton>
         </div>
       </div>
     </div>
@@ -397,13 +603,14 @@ export default function BookDetailPage() {
     <>
       {/* ===== Desktop ===== */}
       <div className="hidden min-h-dvh flex-col md:flex">
-        <AppHeader onLogout={logout} />
+        <AppHeader onLogout={logout} isAdmin={isAdmin} />
         <div className="flex-1 bg-[var(--xds-bg-page)] p-4">
           <div className="mx-auto flex max-w-[720px] flex-col gap-4">
-            <Link href="/dashboard" className="text-[13px] text-[var(--xds-brand-600)] hover:underline">
+            <Link href={backHref} className="text-[13px] text-[var(--xds-brand-600)] hover:underline">
               ← {t("backToList")}
             </Link>
             {titleCard}
+            {statsCard}
             {uploadCard}
             {settingsCard}
             {shareCard}
@@ -416,10 +623,11 @@ export default function BookDetailPage() {
 
       {/* ===== Mobile ===== */}
       <div className="xds-mobile-app flex min-h-dvh flex-col md:hidden">
-        <MobileTopBar title={book.title} onBack={() => router.push("/dashboard")} actions={<MobileHeaderActions onLogout={logout} />} />
+        <MobileTopBar title={book.title} onBack={() => router.push(backHref)} actions={<MobileHeaderActions onLogout={logout} isAdmin={isAdmin} />} />
         <div className="flex-1 overflow-y-auto bg-[var(--xds-bg-page)] xds-mobile-gutter-x py-4">
           <div className="flex flex-col gap-3">
             {titleCard}
+            {statsCard}
             {uploadCard}
             {settingsCard}
             {shareCard}

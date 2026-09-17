@@ -1,7 +1,8 @@
 "use client";
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { apiFetch, ApiError, assetUrl } from "@/lib/api";
+import { getToken } from "@/lib/auth";
 import type { PublicBook } from "@/lib/types";
 import { FlipBook } from "@/components/FlipBook";
 import { XInput } from "@/components/xds/XInput";
@@ -9,10 +10,38 @@ import { XButton } from "@/components/xds/XButton";
 
 interface PasswordRequiredBody {
   passwordRequired?: boolean;
+  privateBook?: boolean;
 }
 
 function tokenStorageKey(permalink: string): string {
   return `flipbook-access-token:${permalink}`;
+}
+
+// F06: GA4 - chi nhan 1 ID dung dinh dang chinh thuc cua Google, KHONG bao gio nhan/eval
+// JavaScript tuy y tu du lieu sach. Tu kiem tra lai o FE (BE da validate khi luu) truoc
+// khi chen vao script - phong truong hop du lieu cu/loi tu nguon khac.
+const GA4_MEASUREMENT_ID_RE = /^G-[A-Za-z0-9]{4,20}$/;
+
+function useGoogleAnalytics(gaId: string | null | undefined) {
+  useEffect(() => {
+    if (!gaId || !GA4_MEASUREMENT_ID_RE.test(gaId)) return;
+    const loader = document.createElement("script");
+    loader.async = true;
+    loader.src = `https://www.googletagmanager.com/gtag/js?id=${encodeURIComponent(gaId)}`;
+    const inline = document.createElement("script");
+    inline.text = [
+      "window.dataLayer = window.dataLayer || [];",
+      "function gtag(){dataLayer.push(arguments);}",
+      "gtag('js', new Date());",
+      `gtag('config', ${JSON.stringify(gaId)});`,
+    ].join("\n");
+    document.head.appendChild(loader);
+    document.head.appendChild(inline);
+    return () => {
+      loader.remove();
+      inline.remove();
+    };
+  }, [gaId]);
 }
 
 /**
@@ -30,20 +59,54 @@ export function PublicBookReader({ permalink, embed = false }: { permalink: stri
   const [passwordError, setPasswordError] = useState<string | null>(null);
   const [verifying, setVerifying] = useState(false);
   const [accessToken, setAccessToken] = useState<string | null>(null);
+  const [privateBlocked, setPrivateBlocked] = useState(false);
+  const lastPingedPageRef = useRef<number | null>(null);
+
+  // F12: ghi nhan "luot xem trang" - 1 ping moi khi sang trang/spread MOI (bo qua neu
+  // trung trang vua ping, tranh dem trung khi remount noi bo cua react-pageflip, vd luc
+  // bat/tat zoom F17). Fire-and-forget: khong cho loi thong ke lam gian doan trai nghiem doc.
+  const pingPageView = useCallback(
+    (page: number) => {
+      if (lastPingedPageRef.current === page) return;
+      lastPingedPageRef.current = page;
+      apiFetch(`/public/books/${permalink}/events`, {
+        method: "POST",
+        token: accessToken,
+        body: { eventType: "page_view" },
+      }).catch(() => {});
+    },
+    [permalink, accessToken]
+  );
 
   const load = useCallback(
-    (token?: string | null) => {
+    (token?: string | null, triedLoginToken = false) => {
       setError(null);
       apiFetch<PublicBook>(`/public/books/${permalink}`, token ? { token } : {})
         .then((b) => {
           setBook(b);
           setPasswordRequired(false);
+          setPrivateBlocked(false);
           if (!embed && typeof document !== "undefined") document.title = `${b.title} - MISA Flipbook`;
         })
         .catch((err) => {
-          if (err instanceof ApiError && err.status === 403 && (err.body as PasswordRequiredBody)?.passwordRequired) {
-            setPasswordRequired(true);
-            return;
+          if (err instanceof ApiError && err.status === 403) {
+            const body = err.body as PasswordRequiredBody;
+            if (body?.privateBook) {
+              // Sach dang Private (F16): thu lai 1 lan bang JWT dang nhap thuong (neu co
+              // va chua thu) de nguoi la owner/admin van xem duoc qua chinh permalink nay -
+              // xem logic tuong ung o public-books.controller.ts (resolveActor).
+              const loginToken = !triedLoginToken ? getToken() : null;
+              if (loginToken && loginToken !== token) {
+                load(loginToken, true);
+                return;
+              }
+              setPrivateBlocked(true);
+              return;
+            }
+            if (body?.passwordRequired) {
+              setPasswordRequired(true);
+              return;
+            }
           }
           setError(err instanceof ApiError ? err.message : t("errorLoadBook"));
         });
@@ -57,6 +120,8 @@ export function PublicBookReader({ permalink, embed = false }: { permalink: stri
     load(stored);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [permalink]);
+
+  useGoogleAnalytics(book?.gaId);
 
   async function submitPassword(e: FormEvent) {
     e.preventDefault();
@@ -77,6 +142,17 @@ export function PublicBookReader({ permalink, embed = false }: { permalink: stri
     } finally {
       setVerifying(false);
     }
+  }
+
+  if (privateBlocked) {
+    return (
+      <div className="reader" style={{ alignItems: "center", justifyContent: "center" }}>
+        <div className="w-full max-w-[340px] rounded-lg bg-[var(--xds-bg)] p-5 text-center shadow-[var(--xds-shadow-dialog)]">
+          <h2 className="mb-1 text-[16px] font-semibold leading-[22px] text-[var(--xds-text)]">{t("privateBookTitle")}</h2>
+          <p className="text-[13px] text-[var(--xds-text-secondary)]">{t("privateBookDesc")}</p>
+        </div>
+      </div>
+    );
   }
 
   if (passwordRequired) {
@@ -134,6 +210,8 @@ export function PublicBookReader({ permalink, embed = false }: { permalink: stri
       imageUrl={(assetId) => assetUrl(`/public/books/${permalink}/assets/${assetId}`) + tokenSuffix}
       shareUrl={embed ? undefined : shareUrl}
       downloadUrl={book.allowDownload ? assetUrl(`/public/books/${permalink}/download`) + tokenSuffix : null}
+      backgroundUrl={book.hasBackground ? assetUrl(`/public/books/${permalink}/background`) + tokenSuffix : null}
+      onPageChange={pingPageView}
     />
   );
 }

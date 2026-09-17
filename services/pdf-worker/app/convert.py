@@ -4,8 +4,9 @@ Day la ban tai su dung CO KIEM CHUNG cua services/pdf-worker/poc/render_bench.py
 (P0 PoC) - cung thu vien (pypdfium2 render, pypdf annotation), cung cach xu ly
 loi (khong crash tren file hong/ma hoa), chi to chuc lai thanh module goi duoc
 tu FastAPI thay vi script doc lap. Xem ADR-P0-parser-renderer.md cho ly do chon
-thu vien va gioi han da biet (chua co PoC audio/video, chua resolve internal
-link ra so trang cu the).
+thu vien va gioi han da biet (chua co PoC audio/video). Link noi bo (internal
+GoTo) da duoc resolve ra so trang cu the (P4/F10 Muc A) qua
+PdfReader.get_destination_page_number.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from dataclasses import dataclass, field
 import pypdfium2 as pdfium
 from pypdf import PdfReader
 from pypdf.errors import FileNotDecryptedError, PdfReadError
+from pypdf.generic import ArrayObject
 from PIL import Image
 
 READING_WIDTH_PX = 1600
@@ -56,6 +58,23 @@ def _normalize_rect(rect, page_w, page_h, rotation):
     return [nx0, ny0, nx1, ny1]
 
 
+def _resolve_dest_page(reader: PdfReader, dest) -> int | None:
+    """Resolve mot /Dest (ten dinh danh hoac mang truc tiep [page_ref, /Fit, ...])
+    thanh so trang 1-based khop voi danh so trang cua manifest. Tra None neu
+    khong resolve duoc (ten dich khong ton tai, tham chieu hong...)."""
+    if dest is None:
+        return None
+    obj = dest.get_object() if hasattr(dest, "get_object") else dest
+    if isinstance(obj, ArrayObject):
+        destination = reader._build_destination("", obj)
+    else:
+        destination = reader.named_destinations.get(str(obj))
+        if destination is None:
+            return None
+    page_index = reader.get_destination_page_number(destination)
+    return None if page_index is None else page_index + 1
+
+
 def _extract_links(pdf_path: pathlib.Path, password: str | None):
     reader = PdfReader(str(pdf_path))
     if reader.is_encrypted:
@@ -87,9 +106,14 @@ def _extract_links(pdf_path: pathlib.Path, password: str | None):
                 elif obj.get("/Dest") is not None or (
                     uri_action and uri_action.get("/S") == "/GoTo"
                 ):
-                    # Chua resolve ten dich -> so trang cu the (P0 limitation da ghi trong ADR).
+                    dest = obj.get("/Dest")
+                    if dest is None and uri_action is not None:
+                        dest = uri_action.get("/D")
                     entry["type"] = "internal_goto"
-                    entry["target"] = None
+                    try:
+                        entry["target"] = _resolve_dest_page(reader, dest)
+                    except (PdfReadError, KeyError, ValueError):
+                        entry["target"] = None
                 else:
                     entry["type"] = "unsupported_action"
                     entry["target"] = None
@@ -152,7 +176,14 @@ def convert_pdf(
                 "page": i + 1,
                 "width_pt": w_pt,
                 "height_pt": h_pt,
-                "rotation": page_link_info.get("rotation", 0),
+                # pypdfium2's get_size()/render() da tu ap dung /Rotate cua trang (w_pt/h_pt
+                # o day la kich thuoc SAU khi xoay, anh render cung da xoay dung huong doc).
+                # Gia tri "rotation" cua pypdf (page_link_info) chi dung NOI BO de quy doi
+                # toa do link ve dung he SAU-xoay qua _normalize_rect - KHONG duoc gui ra
+                # ngoai, neu khong FE se ap dung CSS rotate() THEM MOT LAN NUA len anh da
+                # xoay dung san, gay xoay lech (vd /Rotate 90 nhin thanh lat nguoc 180 do).
+                # Da phat hien that qua kiem tra bang mat P5 voi sample_rotated_mixed.pdf.
+                "rotation": 0,
                 "images": images,
                 "links": page_link_info.get("links", []),
             }

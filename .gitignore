@@ -39,6 +39,9 @@ Thumbs.db
 # Docker local volumes
 infra/docker/volumes/
 
+# Backup that (chua data DB/storage that - khong bao gio commit, xem infra/docker/scripts/backup.sh)
+infra/docker/backups/
+
 # Tu dong sinh boi `next dev` (Next.js 16) - khong phai tai lieu du an
 apps/web/AGENTS.md
 apps/web/CLAUDE.md

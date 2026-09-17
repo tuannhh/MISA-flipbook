@@ -48,6 +48,7 @@ export const ICON_PATHS: Record<string, string[]> = {
   ],
   "chevron-left": ["M15 6l-6 6l6 6"],
   "chevron-right": ["M9 6l6 6l-6 6"],
+  "chevron-down": ["M6 9l6 6l6 -6"],
   "chevrons-left": ["M11 7l-5 5l5 5", "M17 7l-5 5l5 5"],
   "chevrons-right": ["M7 7l5 5l-5 5", "M13 7l5 5l-5 5"],
   copy: [
@@ -83,6 +84,21 @@ export const ICON_PATHS: Record<string, string[]> = {
     "M11 12a1 1 0 1 0 2 0a1 1 0 1 0 -2 0",
     "M11 19a1 1 0 1 0 2 0a1 1 0 1 0 -2 0",
     "M11 5a1 1 0 1 0 2 0a1 1 0 1 0 -2 0",
+  ],
+  // zoom-in/zoom-out: khong co san trong assets/icons cua skill (da grep icons-map.md
+  // khong thay) - lay dung path Tabler outline chinh thuc (MIT, cung bo "zoom-in"/
+  // "zoom-out" trong @tabler/icons-react@3.46.0) theo dung huong dan "chua co trong
+  // Figma thi dung Tabler outline gan nhat" cua icons-map.md, khong tu ve path rieng.
+  "zoom-in": ["M3 10a7 7 0 1 0 14 0a7 7 0 1 0 -14 0", "M7 10l6 0", "M10 7l0 6", "M21 21l-6 -6"],
+  "zoom-out": ["M3 10a7 7 0 1 0 14 0a7 7 0 1 0 -14 0", "M7 10l6 0", "M21 21l-6 -6"],
+  // F13-simplification: them cho XDatePicker (bo loc "khoang thoi gian" o Admin books).
+  calendar: [
+    "M4 7a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2v-12",
+    "M16 3v4",
+    "M8 3v4",
+    "M4 11h16",
+    "M11 15h1",
+    "M12 15v3",
   ],
 };
 

@@ -13,8 +13,10 @@ import { XInput } from "@/components/xds/XInput";
 import { XDialog } from "@/components/xds/XDialog";
 import { XTag, type XTagColor } from "@/components/xds/XTag";
 import { XEmptyState } from "@/components/xds/XEmptyState";
+import { XSelect } from "@/components/xds/XSelect";
 import { XIcon } from "@/components/xds/icons/XIcon";
 import { useToast } from "@/components/xds/XToast";
+import { formatBytes } from "@/lib/format";
 
 type BookWithCover = Book & { cover_asset_id: string | null };
 
@@ -26,8 +28,11 @@ const STATUS_COLOR: Record<Book["status"], XTagColor> = {
   error: "danger",
 };
 
+const STATUS_FILTER_VALUES = ["all", "draft", "converting", "ready", "published", "error"] as const;
+type StatusFilter = (typeof STATUS_FILTER_VALUES)[number];
+
 export default function DashboardPage() {
-  const { ready, token, tenantId, logout } = useSession();
+  const { ready, token, tenantId, isAdmin, logout } = useSession();
   const t = useTranslations("dashboard");
   const tc = useTranslations("common");
   const toast = useToast();
@@ -35,6 +40,8 @@ export default function DashboardPage() {
   const [title, setTitle] = useState("");
   const [creating, setCreating] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [search, setSearch] = useState("");
 
   const STATUS_LABEL: Record<Book["status"], string> = {
     draft: t("statusDraft"),
@@ -43,6 +50,19 @@ export default function DashboardPage() {
     published: t("statusPublished"),
     error: t("statusError"),
   };
+
+  // F12: bo loc theo trang thai + tim theo tieu de (client-side, quy mo PoC danh sach
+  // sach cua 1 Creator khong lon).
+  const statusOptions = [
+    { label: t("filterAllStatuses"), value: "all" as const },
+    ...STATUS_FILTER_VALUES.filter((s): s is Exclude<StatusFilter, "all"> => s !== "all").map((s) => ({
+      label: STATUS_LABEL[s],
+      value: s,
+    })),
+  ];
+  const filteredBooks = (books ?? []).filter(
+    (b) => (statusFilter === "all" || b.status === statusFilter) && b.title.toLowerCase().includes(search.trim().toLowerCase())
+  );
 
   async function loadBooks() {
     if (!token || !tenantId) return;
@@ -130,11 +150,32 @@ export default function DashboardPage() {
     />
   );
 
+  const filteredEmptyState = books !== null && books.length > 0 && filteredBooks.length === 0 && (
+    <XEmptyState type="no-result" title={t("emptyFilteredTitle")} description={t("emptyFilteredSubtitle")} />
+  );
+
+  const toolbar = (
+    <div className="mb-4 flex flex-wrap items-center gap-2">
+      <div className="w-[220px]">
+        <XSelect value={statusFilter} options={statusOptions} onChange={setStatusFilter} />
+      </div>
+      <XInput value={search} onChange={(e) => setSearch(e.target.value)} placeholder={t("searchPlaceholder")} containerClassName="w-[220px]" clearable onClear={() => setSearch("")} />
+    </div>
+  );
+
+  function BookStats({ b }: { b: BookWithCover }) {
+    return (
+      <p className="mt-1 truncate text-[12px] leading-4 text-[var(--xds-text-secondary)]">
+        {formatBytes(b.storage_bytes)} · {t("opens30d", { count: b.opens_30d })}
+      </p>
+    );
+  }
+
   return (
     <>
       {/* ===== Desktop ===== */}
       <div className="hidden min-h-dvh flex-col md:flex">
-        <AppHeader onLogout={logout} />
+        <AppHeader onLogout={logout} isAdmin={isAdmin} />
         <div className="flex-1 bg-[var(--xds-bg-page)] p-4">
           <div className="mx-auto max-w-[1100px]">
             <div className="mb-4 flex items-center justify-between">
@@ -146,9 +187,11 @@ export default function DashboardPage() {
 
             {books === null && <p className="text-[13px] text-[var(--xds-text-secondary)]">{t("loadingBooks")}</p>}
             {emptyState}
-            {books && books.length > 0 && (
+            {books && books.length > 0 && toolbar}
+            {filteredEmptyState}
+            {filteredBooks.length > 0 && (
               <div className="grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-4">
-                {books.map((b) => (
+                {filteredBooks.map((b) => (
                   <Link
                     key={b.id}
                     href={`/dashboard/books/${b.id}`}
@@ -160,6 +203,7 @@ export default function DashboardPage() {
                     <div className="p-3">
                       <div className="mb-2 truncate text-[14px] font-medium text-[var(--xds-text)]">{b.title}</div>
                       <XTag color={STATUS_COLOR[b.status]}>{STATUS_LABEL[b.status]}</XTag>
+                      <BookStats b={b} />
                     </div>
                   </Link>
                 ))}
@@ -172,13 +216,15 @@ export default function DashboardPage() {
 
       {/* ===== Mobile ===== */}
       <div className="xds-mobile-app flex min-h-dvh flex-col md:hidden">
-        <MobileTopBar title={t("headerTitle")} actions={<MobileHeaderActions onLogout={logout} />} />
+        <MobileTopBar title={t("headerTitle")} actions={<MobileHeaderActions onLogout={logout} isAdmin={isAdmin} />} />
         <div className="relative flex-1 overflow-y-auto bg-[var(--xds-bg-page)] xds-mobile-gutter-x py-4">
           {books === null && <p className="text-[13px] text-[var(--xds-text-secondary)]">{t("loadingBooks")}</p>}
           {emptyState}
-          {books && books.length > 0 && (
+          {books && books.length > 0 && toolbar}
+          {filteredEmptyState}
+          {filteredBooks.length > 0 && (
             <div className="flex flex-col gap-2">
-              {books.map((b) => (
+              {filteredBooks.map((b) => (
                 <Link
                   key={b.id}
                   href={`/dashboard/books/${b.id}`}
@@ -194,6 +240,7 @@ export default function DashboardPage() {
                         {STATUS_LABEL[b.status]}
                       </XTag>
                     </div>
+                    <BookStats b={b} />
                   </div>
                   <XIcon name="chevron-right" size={20} className="shrink-0 text-[var(--xds-icon-neutral)]" />
                 </Link>

@@ -8,9 +8,26 @@ import { XIcon } from "@/components/xds/icons/XIcon";
 
 // Header desktop dung chung cho dashboard + chi tiet sach (P1-6, khong dung
 // Sidebar - app chi co 1 khu vuc dieu huong phang, xem ke hoach muc 4).
-export function AppHeader({ onLogoClick, onLogout }: { onLogoClick?: () => void; onLogout: () => void }) {
+export function AppHeader({
+  onLogoClick,
+  onLogout,
+  isAdmin,
+}: {
+  onLogoClick?: () => void;
+  onLogout: () => void;
+  isAdmin?: boolean;
+}) {
   const t = useTranslations("common");
   const [settingsOpen, setSettingsOpen] = useState(false);
+
+  // F13: chi them 1 muc trong menu avatar co san (khong them icon rieng len header -
+  // dung theo dung quy tac "cum ben phai CHI co Thiet lap va Avatar" cua XDS).
+  const menuItems = isAdmin
+    ? [
+        { key: "admin", label: t("adminDashboard"), icon: "settings" as const, href: "/admin" },
+        { key: "logout", label: t("logout"), icon: "logout" as const, danger: true, onSelect: onLogout },
+      ]
+    : [{ key: "logout", label: t("logout"), icon: "logout" as const, danger: true, onSelect: onLogout }];
 
   return (
     <>
@@ -19,9 +36,7 @@ export function AppHeader({ onLogoClick, onLogout }: { onLogoClick?: () => void;
         onLogoClick={onLogoClick}
         onSettingsClick={() => setSettingsOpen(true)}
         user={
-          <XDropdownMenu
-            items={[{ key: "logout", label: t("logout"), icon: "logout", danger: true, onSelect: onLogout }]}
-          >
+          <XDropdownMenu items={menuItems}>
             {({ toggle }) => (
               <button
                 type="button"
