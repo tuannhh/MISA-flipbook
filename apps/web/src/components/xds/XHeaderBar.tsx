@@ -27,7 +27,6 @@ export function XHeaderBar({
   const buttonClass = isBrand
     ? "text-white hover:bg-white/15 focus-visible:outline-white"
     : "text-[var(--xds-icon-neutral)] hover:bg-[var(--xds-bg-hover-soft)] focus-visible:outline-[var(--xds-brand-600)]";
-  const appInitial = appName.trim().charAt(0).toUpperCase();
 
   return (
     <header className={`flex h-12 w-full items-center gap-2 px-4 text-[13px] leading-[18px] ${headerClass}`}>
@@ -38,8 +37,9 @@ export function XHeaderBar({
           onClick={onLogoClick}
           className={`flex shrink-0 items-center gap-3 rounded-lg px-1 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 ${buttonClass}`}
         >
-          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--xds-brand-600)] text-[16px] font-semibold text-white">
-            {appInitial}
+          <span className="flex h-8 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-white px-1">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/brand/misa-logo.jpg" alt="MISA" className="h-6 w-auto object-contain" />
           </span>
           <span className="hidden text-[20px] font-semibold leading-7 sm:block">{appName}</span>
         </button>

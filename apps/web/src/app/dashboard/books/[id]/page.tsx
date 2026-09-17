@@ -32,7 +32,7 @@ const GA4_ID_RE = /^G-[A-Za-z0-9]{4,20}$/;
 function embedCode(publicPath: string): string {
   const origin = typeof window !== "undefined" ? window.location.origin : "";
   const src = `${origin}${publicPath}/embed`;
-  return `<iframe src="${src}" style="width:100%;max-width:900px;aspect-ratio:4/3;border:0" allowfullscreen loading="lazy"></iframe>`;
+  return `<iframe src="${src}" style="width:100%;aspect-ratio:16/9;border:0" allowfullscreen loading="lazy"></iframe>`;
 }
 
 export default function BookDetailPage() {

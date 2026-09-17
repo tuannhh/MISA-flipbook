@@ -67,7 +67,10 @@ Claude Browser xác nhận nhánh fallback chạy đúng. **Còn nghẽn thật*
 tạo Facebook App tại developers.facebook.com (AI không được tạo tài khoản/app thay), điền
 `WEB_PUBLIC_FACEBOOK_APP_ID` vào `infra/docker/.env` rồi rebuild `web`, mới kiểm chứng
 được nhánh Share Dialog thật — xem chi tiết ở MEMORYBANK.md mục "P6 — Social API nâng
-cao". LinkedIn/Instagram chưa bắt đầu.
+cao". **LinkedIn ở mức MVP (F08) đã xong, không có điểm nghẽn** — link `share-offsite`
+không cần App/OAuth, đã kiểm chứng URL sinh đúng qua Claude Browser. Phần LinkedIn "nâng
+cao" (OAuth đăng thẳng qua tài khoản đã kết nối) vẫn vướng điểm nghẽn giống Facebook: cần
+người dùng tự tạo LinkedIn Developer App trước — chưa làm. Instagram chưa bắt đầu.
 
 ## Backlog ưu tiên
 P0: thu thập PDF mẫu → benchmark PDFium/pypdf → annotation/media inventory → thử hiệu ứng + JPEG fallback trên máy yếu → quyết định ADR.
@@ -96,6 +99,18 @@ bằng CSS transform (thư viện react-pageflip/StPageFlip không hỗ trợ zo
 hình xác nhận phóng to/kéo đúng). Còn 1 giới hạn nhỏ đã ghi nhận: tâm zoom canh theo tâm
 khung spread nên trang bìa đơn lẻ (đầu/cuối sách) có thể lệch nhiều hơn khi zoom lần đầu,
 cần kéo lại - chưa tối ưu riêng cho trường hợp này.
+
+**F17 v2 — fullscreen, slider zoom, tiến trình đọc, mã nhúng, sửa lỗi lật đôi trang trên
+mobile — ĐÃ XONG (2026-09-17)**, xem chi tiết ở MEMORYBANK.md: root-cause thật (đọc source
+`page-flip.module.js`) cho lỗi mobile bị lật đôi trang dù đã truyền `usePortrait` đúng — thư
+viện tự tính lại portrait/landscape theo `minWidth` nội bộ, minWidth cũ hardcode 200 khiến
+ngưỡng thật chỉ 400px thay vì 900px dự định; đã sửa và test lại trên nhiều độ rộng (320-1024px)
+kể cả đúng độ rộng mobile 375px người dùng báo lỗi, không hồi quy. Thêm slider zoom liên tục,
+nút fullscreen (Fullscreen API chuẩn, không kiểm chứng được trong Claude Browser do
+Permissions Policy sandbox — cần người dùng tự bấm thử trên trình duyệt thật), thanh tiến
+trình đọc, và nút copy mã nhúng `<iframe>` vào menu chia sẻ. Đã kiểm tra kỹ báo cáo "lỗi lật
+trang 1/trang cuối" bằng đo thời gian 150ms/lần ở cả 2 khổ màn hình — kết luận là độ trễ hiệu
+ứng lật (~450-600ms), không phải lỗi kẹt vĩnh viễn; không hồi quy 109/109 test cũ.
 
 **P4 — F10 Mức A (hyperlink URL ngoài + link nội bộ sang trang) — ĐÃ XONG (2026-09-17)**,
 xem chi tiết ở MEMORYBANK.md: backend đã có sẵn phần trích xuất link từ trước (P0), việc làm

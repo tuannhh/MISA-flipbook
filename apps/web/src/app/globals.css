@@ -57,6 +57,22 @@ textarea {
 }
 
 .reader-top-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.reader-top-logo {
+  flex: none;
+  height: 20px;
+  width: auto;
+  border-radius: 4px;
+  background: #fff;
+  padding: 2px 4px;
+}
+
+.reader-top-title-text {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

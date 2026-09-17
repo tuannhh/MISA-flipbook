@@ -361,7 +361,7 @@ export function FlipBook({
   // bam nut Chia se trong chinh reader), khong dung chung 1 component/route.
   async function copyEmbedCode() {
     if (!shareUrl) return;
-    const code = `<iframe src="${shareUrl}/embed" style="width:100%;max-width:900px;aspect-ratio:4/3;border:0" allowfullscreen loading="lazy"></iframe>`;
+    const code = `<iframe src="${shareUrl}/embed" style="width:100%;aspect-ratio:16/9;border:0" allowfullscreen loading="lazy"></iframe>`;
     try {
       await navigator.clipboard.writeText(code);
       toast("success", t("shareEmbedCopied"));
@@ -435,7 +435,11 @@ export function FlipBook({
   return (
     <div className="reader" style={readerStyle} ref={readerRootRef}>
       <div className="reader-top">
-        <span className="reader-top-title">{title}</span>
+        <span className="reader-top-title">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/brand/misa-logo.jpg" alt="MISA" className="reader-top-logo" />
+          <span className="reader-top-title-text">{title}</span>
+        </span>
         <span className="reader-top-right">
           <span>{pageLabel}</span>
           <button

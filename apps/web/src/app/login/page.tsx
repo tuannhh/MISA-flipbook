@@ -78,8 +78,14 @@ export default function LoginPage() {
     router.replace("/dashboard");
   }
 
+  const logo = (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img src="/brand/misa-logo.jpg" alt="MISA" className="mx-auto mb-4 h-10 w-auto object-contain" />
+  );
+
   const tenantChooser = memberships && (
     <>
+      {logo}
       <h1 className="mb-1 text-[20px] font-semibold leading-7 text-[var(--xds-text)]">{t("chooseTenantTitle")}</h1>
       <p className="mb-4 text-[13px] text-[var(--xds-text-secondary)]">{t("chooseTenantSubtitle")}</p>
       <div className="flex flex-col gap-2">
@@ -97,6 +103,7 @@ export default function LoginPage() {
 
   const loginForm = (
     <>
+      {logo}
       <h1 className="mb-1 text-[20px] font-semibold leading-7 text-[var(--xds-text)]">{t("title")}</h1>
       <p className="mb-6 text-[13px] text-[var(--xds-text-secondary)]">{t("subtitle")}</p>
 

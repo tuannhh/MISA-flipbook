@@ -1350,9 +1350,34 @@ Facebook App tại developers.facebook.com (loại "Consumer" là đủ), lấy 
   thật lúc deploy) vào "App Domains"/"Website" platform để Share Dialog không bị chặn.
 Không cần xin quyền/App Review nào thêm cho riêng tính năng Share Dialog này.
 
-**LinkedIn/Instagram**: chưa bắt đầu (theo đúng thứ tự ưu tiên mới của người dùng).
-LinkedIn cần OAuth đầy đủ (app riêng + client secret + token lưu mã hoá) — quy mô lớn
-hơn nhiều so với Facebook Share Dialog, sẽ khảo sát khi được yêu cầu tiếp.
+**LinkedIn (2026-09-17, kiểm tra lại theo đúng bar MVP của F08)**: `FlipBook.tsx` đã có sẵn
+nút "Chia sẻ LinkedIn" dùng link công khai `https://www.linkedin.com/sharing/share-offsite/
+?url=<link sách>` — kiểm chứng qua Claude Browser (đọc trực tiếp `outerHTML` của thẻ `<a>`
+trong menu chia sẻ, sách `ky-yeu-qlgs-x4eq03pl`): URL sinh đúng, encode đúng, mở tab mới,
+đúng chuẩn `noreferrer noopener`. Endpoint `share-offsite` này **không cần LinkedIn App/OAuth
+gì cả** — đúng bar MVP mà PLAN.md dòng 57 yêu cầu cho F08 ("MVP cung cấp link/iframe và mở
+giao diện chia sẻ của nền tảng"). Vậy **LinkedIn ở mức MVP đã xong, không có điểm nghẽn**,
+khác với Facebook (đang ở mức "Share Dialog nâng cao" cần App ID thật).
+
+Phần **LinkedIn "nâng cao"** mà PLAN.md dòng 60 nhắc riêng ("OAuth, quyền đăng phù hợp, quản
+lý token" — tự đăng thẳng qua tài khoản đã kết nối, không chỉ mở share sheet) là một mức khác
+hẳn, đòi hỏi: tạo LinkedIn Developer App tại linkedin.com/developers (chỉ người dùng/MISA tạo
+được, AI không được tạo tài khoản/app thay), xin sản phẩm "Share on LinkedIn" hoặc "Sign In
+with LinkedIn using OpenID Connect", cấu hình OAuth redirect URI, rồi mới cài luồng OAuth +
+lưu/refresh token ở BE. Đây là điểm nghẽn thật giống hệt Facebook — **chưa làm** vì cần người
+dùng tự tạo app trước, không nằm trong phạm vi MVP F08 nên không chặn tiến độ.
+
+**Instagram (2026-09-17, đối chiếu lại PLAN.md dòng 62)**: PLAN.md yêu cầu MVP cho Instagram
+chỉ cần "nút chia sẻ qua hệ điều hành khi khả dụng, hoặc sao chép link + ảnh thumbnail để
+đăng thủ công; không báo thành công nếu chỉ mở share sheet" — không yêu cầu một nút riêng
+tên "Instagram". `FlipBook.tsx` đã có sẵn `nativeShare()` (chỉ hiện khi
+`navigator.share` tồn tại — đúng trên mobile thật, ẩn đúng trên desktop không hỗ trợ) mở
+share sheet hệ điều hành (từ đó chọn Instagram/Zalo/bất kỳ app nào máy có), không tự báo
+"đã đăng thành công" (chỉ bắt lỗi im lặng khi người dùng tự hủy) — đúng yêu cầu. "Sao chép
+link" cũng có sẵn. **Vậy MVP Instagram coi như đã đủ** qua 2 cơ chế có sẵn này, không cần
+xây thêm nút riêng. Giới hạn nhỏ còn thiếu so với PLAN.md: chưa có "sao chép kèm ảnh
+thumbnail" (hiện chỉ copy link text) — có thể bổ sung sau nếu người dùng thấy cần, không
+phải điểm nghẽn ngoại cảnh (không cần app/API riêng, làm được ngay khi được yêu cầu).
 
 ## F17 — Cải tiến Reader: fullscreen, slider zoom, tiến trình đọc, mã nhúng, sửa lỗi lật
 đôi trang trên mobile (2026-09-17)
@@ -1423,6 +1448,31 @@ APP_USER_URL=postgres://app_user:<pw>@127.0.0.1:5432/misa_flipbook \
 SEED_ADMIN_PASSWORD=MisaAdmin@2026 \
 node tests/integration/<file>.test.js
 ```
+
+## Mã nhúng bỏ giới hạn max-width 900px + logo MISA trên header/login/reader (2026-09-17)
+
+Theo yêu cầu người dùng sau khi xem thử mã nhúng thực tế: `<iframe ... max-width:900px;
+aspect-ratio:4/3>` cũ không hợp lý cho màn hình lớn (4K) và tỷ lệ 4:3 đã lỗi thời so với
+16:9 phổ biến hiện nay. Đã sửa ở **cả 2 nơi sinh mã nhúng** (dùng công thức riêng, không
+share code — xem ghi chú trong `FlipBook.tsx` và `dashboard/books/[id]/page.tsx`):
+`style="width:100%;aspect-ratio:16/9;border:0"` — bỏ hẳn `max-width`, để iframe co giãn
+hết theo container của trang nhúng (kể cả màn 4K), đổi tỷ lệ khung sang 16:9.
+
+Đồng thời thêm logo MISA thật (`apps/web/public/brand/misa-logo.jpg`, copy từ file người
+dùng cung cấp) vào 3 chỗ theo đúng yêu cầu:
+- `XHeaderBar.tsx` (dùng chung cho mọi trang có header — dashboard, chi tiết sách, admin):
+  thay avatar chữ "M" cũ bằng `<img>` logo trong khung nền trắng bo góc.
+- `login/page.tsx`: thêm logo phía trên tiêu đề, cả bản desktop lẫn mobile, cả màn đăng
+  nhập lẫn màn chọn tenant.
+- `FlipBook.tsx` (reader công khai — dùng chung cho `/read/:permalink` và `/embed`): thêm
+  logo nhỏ ngay trước tên sách ở thanh trên cùng.
+
+**Đã kiểm chứng thật qua Claude Browser** (không chỉ đọc code): rebuild + restart lại
+container `web` (đổi Dockerfile/`public/` cần build lại, không hot-reload vì đây là bản
+build production trong Docker, không phải `next dev`), chụp ảnh xác nhận logo hiện đúng
+trên: màn đăng nhập, dashboard (header xanh), reader công khai. Đọc trực tiếp giá trị
+`<textarea>` mã nhúng trên trang chi tiết sách xác nhận đúng chuỗi mới, không còn
+`max-width:900px`/`4:3`. Không hồi quy: chạy lại 6 bộ test tích hợp, 109/109 PASS.
 
 ## Cách cập nhật
 Sau mỗi đợt công việc, ghi: đã đổi gì, quyết định/giả định mới, test nào thực sự chạy, kết quả/lỗi, commit và bước kế tiếp.
