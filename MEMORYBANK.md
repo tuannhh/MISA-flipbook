@@ -1354,6 +1354,76 @@ Không cần xin quyền/App Review nào thêm cho riêng tính năng Share Dial
 LinkedIn cần OAuth đầy đủ (app riêng + client secret + token lưu mã hoá) — quy mô lớn
 hơn nhiều so với Facebook Share Dialog, sẽ khảo sát khi được yêu cầu tiếp.
 
+## F17 — Cải tiến Reader: fullscreen, slider zoom, tiến trình đọc, mã nhúng, sửa lỗi lật
+đôi trang trên mobile (2026-09-17)
+
+Theo phản hồi trực tiếp của người dùng khi tự test qua Docker (đối chiếu Heyzine + ảnh
+chụp DevTools thật ở iPhone 16 Pro Max 440px cho thấy mobile bị lật "2 trang" như desktop).
+
+**BUG THẬT nghiêm trọng phát hiện + ĐÃ SỬA — mobile lật đôi trang**: `react-pageflip`
+(`size="stretch"`) không chỉ dựa vào prop `usePortrait` mà TỰ tính lại portrait/landscape
+qua công thức riêng `e < 2*minWidth` (đọc thẳng `node_modules/page-flip/dist/js/
+page-flip.module.js`, hàm `calculateBoundsRect()`, không đoán). `minWidth` trước đó cố
+định = 200 → ngưỡng thật sự chỉ là 400px. Sách test trước đây ở 375px (dưới 400) nên
+"tình cờ" đúng; 440px (iPhone 16 Pro Max, do người dùng tự phát hiện) vượt ngưỡng 400 nên
+thư viện tự ý coi là landscape, ép mỗi trang render ở NỬA bề rộng thật — đúng hiện tượng
+"lật đôi trang, rất khó nhìn" người dùng mô tả. **Sửa**: khi không ở chế độ spread
+(`!isSpreadCapable`), đặt `minWidth` = bề rộng khung hiện tại (làm tròn theo bước 20px để
+tránh remount liên tục do ResizeObserver lệch 1-2px), `minHeight` tính tương ứng theo
+`pageAspect` — luôn thoả `2*minWidth > containerWidth` nên thư viện không còn tự ý rơi về
+landscape; remount qua `key` khi "bucket" bề rộng đổi (props của page-flip đóng băng từ
+lúc khởi tạo, đổi sau không có tác dụng — đã biết từ trước). **Đã test thật qua Claude
+Browser ở NHIỀU bề rộng trước khi kết luận** (khác với lần trước chỉ test 1 điểm 375px):
+320px (không tràn ngang, `scrollWidth` không vượt viewport), 375px, 414px, 440px (đúng
+điểm bug gốc — xác nhận hết lỗi, trang hiển thị đầy đủ bề rộng), 768px (tablet, vẫn đúng
+1 trang theo `SPREAD_MIN_WIDTH=900`), 1024px (desktop, vẫn spread 2 trang đúng như cũ,
+không hồi quy) — dùng sách thật 70 trang `ky-yeu-qlgs-x4eq03pl` (đúng sách người dùng
+dùng để phát hiện bug). Chạy lại đủ 109/109 test tích hợp sau khi sửa — không hồi quy.
+
+**Tính năng mới đã làm + test thật**:
+- **Mã nhúng trong menu Chia sẻ** (trước đây chỉ có ở dashboard Creator, `FlipBook.tsx`
+  dùng reader chưa có): thêm mục "Sao chép mã nhúng" — copy cùng cú pháp `<iframe>` với
+  `embedCode()` của `dashboard/books/[id]/page.tsx` (F09) nhưng dựa trên `shareUrl` (URL
+  công khai đang đọc) thay vì cần vào dashboard. Test thật: bấm nút qua Claude Browser,
+  xác nhận `navigator.clipboard.writeText()` chạy thành công (không rơi vào nhánh lỗi).
+- **Nút Fullscreen**: dùng Fullscreen API chuẩn (`requestFullscreen`/`exitFullscreen`),
+  icon `maximize`/`minimize` (lấy đúng path SVG gốc Tabler Icons qua
+  `cdn.jsdelivr.net/npm/@tabler/icons`, cùng cách làm với `zoom-in`/`zoom-out` trước đây).
+  Lắng nghe `fullscreenchange` để tự đồng bộ trạng thái nếu trình duyệt tự thoát (vd người
+  dùng bấm Esc). **Giới hạn đã biết**: gọi `requestFullscreen()` thật trong Claude Browser
+  trả lỗi `"Permissions check failed"` — do Permissions Policy của chính pane trình duyệt
+  sandbox này chặn Fullscreen API (không phải lỗi code), nên KHÔNG tự xác nhận được bằng
+  mắt trong phiên này; code đúng theo spec chuẩn, cần người dùng tự bấm thử trên trình
+  duyệt thật (Chrome/Edge/Safari ở top-level tab) để xác nhận cuối cùng.
+- **Thanh trượt (slider) zoom**: `<input type="range">` bên cạnh 2 nút +/- cũ, dùng chung
+  `clampPan`/state `zoom` sẵn có. Test thật: set giá trị qua `form_input`, xác nhận
+  `transform: scale(2)` áp dụng đúng lên `.flipbook-book`.
+- **Thanh tiến trình đọc**: dải mỏng dưới khung đọc, rộng theo % `trang cuối đang thấy /
+  tổng số trang` (dùng trang PHẢI của spread nếu đang mở spread, để đạt đúng 100% ở trang
+  cuối cùng thay vì dừng ở trang trái). Test thật: xác nhận `aria-valuenow`/`style.width`
+  đúng tỷ lệ (5/70 → 7%).
+
+Đã thêm i18n key mới (`shareEmbedCode`, `shareEmbedCopied`, `shareEmbedCopyFailed`,
+`zoomLevel`, `fullscreenEnter`, `fullscreenExit`, `readingProgress`) vào cả `vi.json` và
+`en.json`. Rebuild lại `web`, `tsc --noEmit` sạch trước khi test.
+
+**LƯU Ý cho phiên sau — mật khẩu tài khoản test admin/creator đã đổi**: theo yêu cầu
+người dùng ("cho tôi tài khoản admin, creator để test"), đã đặt lại mật khẩu (trực tiếp
+qua DB dev, argon2id) cho `admin@misa.local` → `MisaAdmin@2026` và
+`creator-p2@demo.local` → `MisaCreator@2026`; đã thêm membership `creator` cho
+`admin@misa.local` vào tenant "Cong ty Demo P2" để tài khoản Admin cũng tạo/sửa sách được
+như Creator (kiểm chứng qua API thật, không chỉ đọc code — xem cơ chế ở
+`DbContextInterceptor`: Admin bỏ qua kiểm tra membership, cộng RLS `*_admin_all`). **Hệ
+quả**: `tests/integration/*.test.js` không còn dùng được mật khẩu mặc định
+`ChangeThisAdminPw123!` của biến `SEED_ADMIN_PASSWORD` — phải truyền
+`SEED_ADMIN_PASSWORD=MisaAdmin@2026` khi chạy test, ví dụ:
+```
+DATABASE_URL=postgres://misa_admin:<pw>@127.0.0.1:5432/misa_flipbook \
+APP_USER_URL=postgres://app_user:<pw>@127.0.0.1:5432/misa_flipbook \
+SEED_ADMIN_PASSWORD=MisaAdmin@2026 \
+node tests/integration/<file>.test.js
+```
+
 ## Cách cập nhật
 Sau mỗi đợt công việc, ghi: đã đổi gì, quyết định/giả định mới, test nào thực sự chạy, kết quả/lỗi, commit và bước kế tiếp.
 Giữ lịch sử ADR nếu thay quyết định, đánh dấu superseded thay vì xóa.

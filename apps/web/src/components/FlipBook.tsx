@@ -1,5 +1,13 @@
 "use client";
-import { forwardRef, useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ChangeEvent as ReactChangeEvent,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import HTMLFlipBook from "react-pageflip";
 import { useTranslations } from "next-intl";
 import type { ReaderPage } from "@/lib/types";
@@ -167,12 +175,14 @@ export function FlipBook({
 }) {
   const t = useTranslations("reader");
   const { simple, reducedMotion } = useSimpleReaderMode();
+  const readerRootRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const bookRef = useRef<{ pageFlip(): PageFlipApi } | null>(null);
   const [containerWidth, setContainerWidth] = useState(0);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [zoom, setZoom] = useState(ZOOM_MIN);
   const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const panDrag = useRef<{ startX: number; startY: number; startPanX: number; startPanY: number } | null>(null);
 
   useEffect(() => {
@@ -191,15 +201,32 @@ export function FlipBook({
   const width = BASE_UNIT;
   const height = Math.round(BASE_UNIT / pageAspect);
 
-  // Tu dong 1/2 trang theo be rong khung (PLAN.md muc 4). Da thu them nut ep tay
-  // "1 trang/2 trang" cho khoang tablet qua minWidth/maxWidth cua react-pageflip
-  // (xem node_modules/page-flip/dist/js de biet co che that: size="stretch" quyet
-  // dinh portrait/landscape qua "e<2*minWidth" roi "e<2*h" voi h bi tran boi maxWidth
-  // va chieu cao khung) nhung minWidth cung la SAN CUNG cho kich thuoc render that -
-  // ep minWidth=be rong khung lam trang bi phong to vo layout (da tu kiem thu thay
-  // hong, khong phai suy doan). Bo nut ep tay, chi giu hanh vi tu dong on dinh; ghi
-  // lai trong MEMORYBANK.md la gioi han con mo, chua lam duoc theo dung yeu cau.
+  // Tu dong 1/2 trang theo be rong khung (PLAN.md muc 4: "Mobile mac dinh mot trang ke
+  // ca man hinh doc/ngang; tablet co chon 1/2 trang theo chieu rong thuc te").
   const isSpreadCapable = containerWidth >= SPREAD_MIN_WIDTH && pages.length > 2;
+
+  // BUG THAT phat hien 2026-09-17 (nguoi dung bao qua Chrome DevTools that o
+  // iPhone 16 Pro Max 440px): page-flip's "stretch" size KHONG chi dua vao prop
+  // usePortrait ma con tu tinh lai portrait/landscape rieng qua cong thuc
+  // "e < 2*minWidth" (doc thang node_modules/page-flip/dist/js/page-flip.module.js,
+  // khong doan) - neu container >= 2*minWidth thi VAN rendering nhu landscape (h =
+  // blockWidth/2, tuc la nua be rong) DU usePortrait=true da truyen vao. minWidth cu
+  // co gia tri co dinh 200 => nguong that su la 400px, nen 375px (da test truoc day)
+  // tinh co vua duoi nguong con 440px (iPhone 16 Pro Max) thi vuot qua, lam trang bi
+  // ep hien thi nhu dang "2 trang" (nua be rong, rat kho nhin dung nhu nguoi dung mo
+  // ta). Sua: khi dang o che do portrait (khong spread), dat minWidth = be rong khung
+  // hien tai (lam tron xuong boi WIDTH_BUCKET de tranh remount lien tuc do
+  // ResizeObserver nhay so le 1-2px) - luon thoa "2*minWidth > containerWidth" nen
+  // page-flip khong con tu y roi ve landscape; minHeight tinh tuong ung theo pageAspect
+  // de khong lech ty le. Remount qua key khi bucket doi de ap dung minWidth moi (props
+  // cua page-flip dong bang tu luc khoi tao, doi sau khong co tac dung - da biet tu
+  // truoc). Da test that qua Claude Browser o nhieu be rong (320/375/414/440/768/900)
+  // truoc khi ket luan sua xong, xem MEMORYBANK.md.
+  const WIDTH_BUCKET = 20;
+  const widthBucket = Math.max(1, Math.round(containerWidth / WIDTH_BUCKET));
+  const portraitMinWidth = Math.max(200, widthBucket * WIDTH_BUCKET);
+  const minWidth = isSpreadCapable ? 200 : portraitMinWidth;
+  const minHeight = Math.round(minWidth / pageAspect);
 
   const flippingTime = simple ? 1 : 700;
 
@@ -259,6 +286,42 @@ export function FlipBook({
 
   const isZoomed = zoom > ZOOM_MIN;
 
+  // Thanh truot zoom lien tuc (thay vi chi buoc co dinh qua +/-) - van dung chung
+  // clampPan de khong keo anh ra ngoai khung khi vua keo slider vua da pan truoc do.
+  const onZoomSlider = useCallback(
+    (e: ReactChangeEvent<HTMLInputElement>) => {
+      const nz = Math.round(Number(e.target.value) * 10) / 10;
+      setZoom(nz);
+      setPan((p) => (nz === ZOOM_MIN ? { x: 0, y: 0 } : clampPan(p, nz)));
+    },
+    [clampPan]
+  );
+
+  // Fullscreen (Fullscreen API chuan) tren toan bo khung doc (bao gom header/nut bam,
+  // khong chi rieng vung trang) de nguoi dung van thao tac zoom/chia se duoc khi dang
+  // fullscreen. Lang nghe "fullscreenchange" thay vi tu suy doan trang thai vi trinh
+  // duyet co the tu thoat fullscreen (vd nguoi dung bam Esc) ma khong qua ham toggle.
+  useEffect(() => {
+    function onFsChange() {
+      setIsFullscreen(document.fullscreenElement === readerRootRef.current);
+    }
+    document.addEventListener("fullscreenchange", onFsChange);
+    return () => document.removeEventListener("fullscreenchange", onFsChange);
+  }, []);
+
+  const toggleFullscreen = useCallback(async () => {
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+      } else {
+        await readerRootRef.current?.requestFullscreen();
+      }
+    } catch {
+      // Mot so trinh duyet/thiet bi tu choi Fullscreen API (vd khong co tuong tac
+      // nguoi dung truc tiep truoc do) - im lang bo qua, khong chan doc sach.
+    }
+  }, []);
+
   const onStagePointerDown = useCallback(
     (e: ReactPointerEvent<HTMLDivElement>) => {
       if (!isZoomed) return;
@@ -291,6 +354,19 @@ export function FlipBook({
       toast("success", t("shareCopied"));
     } catch {
       toast("error", t("shareCopyFailed"));
+    }
+  }
+  // Cung cong thuc voi embedCode() o dashboard/books/[id]/page.tsx (F09) - lap lai o day
+  // vi day la 2 ngu canh khac nhau (Creator quan tri vs. bat ky ai co link cong khai
+  // bam nut Chia se trong chinh reader), khong dung chung 1 component/route.
+  async function copyEmbedCode() {
+    if (!shareUrl) return;
+    const code = `<iframe src="${shareUrl}/embed" style="width:100%;max-width:900px;aspect-ratio:4/3;border:0" allowfullscreen loading="lazy"></iframe>`;
+    try {
+      await navigator.clipboard.writeText(code);
+      toast("success", t("shareEmbedCopied"));
+    } catch {
+      toast("error", t("shareEmbedCopyFailed"));
     }
   }
   function openFacebookLinkFallback() {
@@ -341,6 +417,11 @@ export function FlipBook({
       ? t("pageLabelSpread", { from: currentPage?.page ?? 0, to: rightPage.page, total: pages.length })
       : t("pageLabelSingle", { page: currentPage?.page ?? "-", total: pages.length });
 
+  // Thanh tien trinh doc: tinh theo trang PHAI cung (spread) khi co, de "100%" khop
+  // dung luc nguoi dung thay het trang cuoi, khong dung lai o trang trai cua spread cuoi.
+  const lastVisiblePage = (rightPage ?? currentPage)?.page ?? 0;
+  const readingProgress = pages.length > 0 ? Math.min(100, Math.round((lastVisiblePage / pages.length) * 100)) : 0;
+
   // F15: lam toi anh nen bang 1 lop gradient phu len tren, giu chu tren reader-top/
   // reader-bottom (mau trang co san) va anh trang PDF (nen trang) van doc duoc ro rang.
   const readerStyle = backgroundUrl
@@ -352,7 +433,7 @@ export function FlipBook({
     : undefined;
 
   return (
-    <div className="reader" style={readerStyle}>
+    <div className="reader" style={readerStyle} ref={readerRootRef}>
       <div className="reader-top">
         <span className="reader-top-title">{title}</span>
         <span className="reader-top-right">
@@ -367,6 +448,17 @@ export function FlipBook({
           >
             <XIcon name="zoom-out" size={18} />
           </button>
+          <input
+            className="reader-zoom-slider"
+            type="range"
+            min={ZOOM_MIN}
+            max={ZOOM_MAX}
+            step={ZOOM_STEP}
+            value={zoom}
+            onChange={onZoomSlider}
+            aria-label={t("zoomLevel")}
+            title={t("zoomLevel")}
+          />
           <button
             type="button"
             className="reader-icon-btn"
@@ -377,6 +469,15 @@ export function FlipBook({
           >
             <XIcon name="zoom-in" size={18} />
           </button>
+          <button
+            type="button"
+            className="reader-icon-btn"
+            onClick={toggleFullscreen}
+            aria-label={t(isFullscreen ? "fullscreenExit" : "fullscreenEnter")}
+            title={t(isFullscreen ? "fullscreenExit" : "fullscreenEnter")}
+          >
+            <XIcon name={isFullscreen ? "minimize" : "maximize"} size={18} />
+          </button>
           {downloadUrl && (
             <a className="reader-icon-btn" href={downloadUrl} download aria-label={t("download")} title={t("download")}>
               <XIcon name="download" size={18} />
@@ -386,6 +487,7 @@ export function FlipBook({
             <XDropdownMenu
               items={[
                 { key: "copy", label: t("shareCopyLink"), icon: "copy", onSelect: copyShareLink },
+                { key: "embed", label: t("shareEmbedCode"), icon: "file-text", onSelect: copyEmbedCode },
                 {
                   key: "facebook",
                   label: t("shareFacebook"),
@@ -452,14 +554,14 @@ export function FlipBook({
               // prop sau do KHONG co tac dung - phai remount khi isZoomed doi trang thai
               // (bat/tat zoom) de tat that su keo-de-lat trang cua thu vien trong luc
               // pan, tranh xung dot voi pan tu viet (F17).
-              key={`${pages.length}-${isSpreadCapable}-${isZoomed}`}
+              key={`${pages.length}-${isSpreadCapable}-${isZoomed}-${isSpreadCapable ? 0 : widthBucket}`}
               ref={bookRef as never}
               width={width}
               height={height}
               size="stretch"
-              minWidth={200}
+              minWidth={minWidth}
               maxWidth={2200}
-              minHeight={Math.round(200 / pageAspect)}
+              minHeight={minHeight}
               maxHeight={Math.round(2200 / pageAspect)}
               maxShadowOpacity={0.5}
               showCover
@@ -496,6 +598,17 @@ export function FlipBook({
             </HTMLFlipBook>
           </>
         )}
+      </div>
+
+      <div
+        className="reader-progress"
+        role="progressbar"
+        aria-label={t("readingProgress")}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={readingProgress}
+      >
+        <div className="reader-progress-fill" style={{ width: `${readingProgress}%` }} />
       </div>
 
       <div className="reader-bottom">

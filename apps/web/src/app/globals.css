@@ -258,6 +258,33 @@ textarea {
   font-size: 13px;
 }
 
+.reader-zoom-slider {
+  width: 72px;
+  accent-color: var(--xds-brand-600, #245fdf);
+  cursor: pointer;
+}
+
+.reader-progress {
+  height: 3px;
+  background: rgba(255, 255, 255, 0.15);
+  flex: none;
+}
+
+.reader-progress-fill {
+  height: 100%;
+  background: var(--xds-brand-600, #245fdf);
+  transition: width 0.2s ease-out;
+}
+
+/* Fullscreen (F17): trinh duyet tu dan phan tu fullscreen kin man hinh, nhung ep lai
+   tuong minh de chac chan khong bi anh huong boi CSS `.reader{position:fixed;inset:0}`
+   khi API fullscreen ap dung tren chinh phan tu nay (mot so trinh duyet giu nguyen
+   position:fixed cua phan tu, gay lech neu inset khong con dung nghia trong fullscreen). */
+.reader:fullscreen {
+  width: 100vw;
+  height: 100vh;
+}
+
 @media (max-width: 640px) {
   .page {
     padding: 12px;

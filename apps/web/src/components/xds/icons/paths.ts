@@ -91,6 +91,21 @@ export const ICON_PATHS: Record<string, string[]> = {
   // Figma thi dung Tabler outline gan nhat" cua icons-map.md, khong tu ve path rieng.
   "zoom-in": ["M3 10a7 7 0 1 0 14 0a7 7 0 1 0 -14 0", "M7 10l6 0", "M10 7l0 6", "M21 21l-6 -6"],
   "zoom-out": ["M3 10a7 7 0 1 0 14 0a7 7 0 1 0 -14 0", "M7 10l6 0", "M21 21l-6 -6"],
+  // F17-fullscreen: khong co san trong assets/icons cua skill - lay dung path Tabler
+  // outline chinh thuc qua cdn.jsdelivr.net/npm/@tabler/icons (MIT), cung cach lam voi
+  // zoom-in/zoom-out o tren, khong tu ve path rieng.
+  maximize: [
+    "M4 8v-2a2 2 0 0 1 2 -2h2",
+    "M4 16v2a2 2 0 0 0 2 2h2",
+    "M16 4h2a2 2 0 0 1 2 2v2",
+    "M16 20h2a2 2 0 0 0 2 -2v-2",
+  ],
+  minimize: [
+    "M15 19v-2a2 2 0 0 1 2 -2h2",
+    "M15 5v2a2 2 0 0 0 2 2h2",
+    "M5 15h2a2 2 0 0 1 2 2v2",
+    "M5 9h2a2 2 0 0 0 2 -2v-2",
+  ],
   // F13-simplification: them cho XDatePicker (bo loc "khoang thoi gian" o Admin books).
   calendar: [
     "M4 7a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2v-12",
