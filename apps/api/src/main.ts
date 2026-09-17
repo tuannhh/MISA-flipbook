@@ -14,7 +14,13 @@ async function bootstrap() {
   // FE (apps/web) la app rieng, goi qua HTTP thuan tuy (khong SSR-proxy, khong session
   // chia se) - can CORS de trinh duyet cho phep goi tu domain khac. Dung Bearer token
   // (khong cookie) nen khong can credentials: true.
-  const app = await NestFactory.create(AppModule, { cors: { origin: corsOrigins() } });
+  // exposedHeaders: Content-Disposition khong nam trong danh sach header CORS "an toan"
+  // mac dinh trinh duyet cho JS doc qua fetch() - can khai bao ro de FE (F11 tai xuong)
+  // doc duoc ten file goi y neu can, du hien tai dung <a href download> (trinh duyet tu
+  // ap dung header nay khi dieu huong, khong phu thuoc JS doc duoc hay khong).
+  const app = await NestFactory.create(AppModule, {
+    cors: { origin: corsOrigins(), exposedHeaders: ["Content-Disposition"] },
+  });
   app.useGlobalPipes(
     new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true })
   );

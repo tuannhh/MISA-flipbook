@@ -95,6 +95,12 @@ services:
       context: ../../apps/web
       args:
         NEXT_PUBLIC_API_BASE_URL: ${WEB_PUBLIC_API_BASE_URL:-http://localhost:3000}
+    environment:
+      # F08: generateMetadata (Open Graph, server-side) chay code TRONG container web,
+      # phai goi thang toi service "api" qua Docker network noi bo - khac han
+      # NEXT_PUBLIC_API_BASE_URL o tren (URL cho TRINH DUYET nguoi dung, xem chu thich
+      # phia tren). Bien runtime thuong (khong NEXT_PUBLIC_), khong bi inline luc build.
+      API_INTERNAL_BASE_URL: http://api:3000
     restart: unless-stopped
     depends_on:
       api:

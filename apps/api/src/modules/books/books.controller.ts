@@ -1,4 +1,5 @@
 import * as crypto from "crypto";
+import * as argon2 from "argon2";
 import {
   BadRequestException,
   Body,
@@ -324,14 +325,37 @@ export class BooksController {
         throw new BadRequestException("thumbnailAssetId khong hop le hoac khong thuoc sach nay.");
       }
     }
+    // removePassword uu tien hon password neu ca 2 cung gui (tranh vua xoa vua dat mot
+    // luc mot cach mo ho). Chi hash khi thuc su co password moi - khong hash chuoi rong.
+    const removePassword = dto.removePassword === true;
+    const newPasswordHash = !removePassword && dto.password ? await argon2.hash(dto.password) : null;
+    // access_epoch tang moi khi mat khau doi/xoa - vo hieu hoa ngay moi access token da
+    // phat qua verify-password truoc do (F05: doi mat khau phai buoc nguoi xem nhap lai).
+    const bumpEpoch = removePassword || newPasswordHash !== null;
     const { rows } = await req.dbClient.query(
-      `INSERT INTO book_settings (tenant_id, book_id, allow_download, thumbnail_asset_id)
-       VALUES ($1,$2, COALESCE($3, false), $4)
+      `INSERT INTO book_settings (tenant_id, book_id, allow_download, thumbnail_asset_id, password_hash, access_epoch)
+       VALUES ($1,$2, COALESCE($3, false), $4, $5, CASE WHEN $6 THEN 1 ELSE 0 END)
        ON CONFLICT (book_id) DO UPDATE SET
          allow_download = COALESCE($3, book_settings.allow_download),
-         thumbnail_asset_id = COALESCE($4, book_settings.thumbnail_asset_id)
+         thumbnail_asset_id = COALESCE($4, book_settings.thumbnail_asset_id),
+         password_hash = CASE
+           WHEN $7::boolean THEN NULL
+           WHEN $5::text IS NOT NULL THEN $5
+           ELSE book_settings.password_hash
+         END,
+         access_epoch = CASE WHEN $6::boolean THEN book_settings.access_epoch + 1 ELSE book_settings.access_epoch END,
+         failed_attempts = CASE WHEN $6::boolean THEN 0 ELSE book_settings.failed_attempts END,
+         locked_until = CASE WHEN $6::boolean THEN NULL ELSE book_settings.locked_until END
        RETURNING allow_download, thumbnail_asset_id, ga_id, (password_hash IS NOT NULL) AS has_password`,
-      [req.tenantId, bookId, dto.allowDownload ?? null, dto.thumbnailAssetId ?? null]
+      [
+        req.tenantId,
+        bookId,
+        dto.allowDownload ?? null,
+        dto.thumbnailAssetId ?? null,
+        newPasswordHash,
+        bumpEpoch,
+        removePassword,
+      ]
     );
     return rows[0];
   }

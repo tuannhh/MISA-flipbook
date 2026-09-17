@@ -1,5 +1,5 @@
 # Memory bank — MISA Flipbook
-Cập nhật: 17/09/2026. Trạng thái: P1+P2 xong (chưa cắt tag), đang chuẩn bị P3.
+Cập nhật: 17/09/2026. Trạng thái: P1+P2+P3 xong (chưa cắt tag).
 Mục đích: nguồn trạng thái được lưu trong dự án để tiếp tục ở phiên làm việc sau; không dựa vào trí nhớ của cuộc hội thoại.
 
 ## Yêu cầu gốc đã xác định
@@ -370,16 +370,225 @@ tham chiếu ngắn ở ROADMAP.md mục Backlog:
   dùng `react-pageflip`) — KHÔNG chuyển sang flipbook-vue (khác framework, xem ADR
   P2-flip); chỉ lấy ý tưởng thiết kế API.
 
-Chưa bắt đầu: P3-P6, Git tag bản stable, và cả 3 mục F15/F16/F17 vừa ghi nhận ở trên.
-Điểm stable gần nhất: chưa có (P1+P2 xong nhưng chưa cắt tag).
+## P3 — Quản lý xuất bản (mật khẩu F05, replace/rollback F07, chia sẻ F08, embed F09, download F11)
+Đặt `/goal` tự làm nốt P3 sau khi khảo sát ROADMAP.md ("làm thật tâm đắc, không tự bịa kết quả
+để bypass testcase" — nguyên văn chỉ đạo người dùng). Thứ tự làm theo đúng backlog ROADMAP.md:
+protection end-to-end (F05) → replace/publish nguyên tử (F07) → download (F11) → embed/share
+(F09/F08).
+
+**F05 — Mật khẩu xem sách**: migration `infra/migrations/0007_book_password_protection.sql`
+thêm `book_settings.failed_attempts`/`locked_until`; mở rộng `public_get_book` trả thêm
+password_hash/access_epoch/failed_attempts/locked_until (SQL không gọi được argon2, nên chỉ
+tầng Node mới so khớp được — hàm SQL chỉ cung cấp dữ liệu, không tự chặn nữa); thêm hàm
+`public_record_password_attempt` (tăng/reset đếm sai, tự khóa khi chạm ngưỡng) và
+`public_get_source_pdf` (F11). BE (`public-books.controller.ts`) dùng lại `argon2` (đã có sẵn
+từ auth Creator/Admin) để hash/verify, và một "book access token" là JWT riêng ký bằng
+`JwtService` có sẵn (khác JWT đăng nhập, phân biệt bằng claim `typ:"book_access"` + `bookId` +
+`accessEpoch`) — cấp qua `POST /public/books/:permalink/verify-password` sau khi nhập đúng, hết
+hạn sau `BOOK_ACCESS_TOKEN_TTL_SECONDS` (mặc định 12h). Đổi/xóa mật khẩu tăng `access_epoch` ->
+token cũ tự động vô hiệu ngay, không cần danh sách đen riêng. Khóa tạm thời sau
+`BOOK_PASSWORD_MAX_ATTEMPTS` lần sai liên tiếp (mặc định 8) trong `BOOK_PASSWORD_LOCKOUT_MINUTES`
+phút (mặc định 15) — kiểm tra khóa TRƯỚC cả khi so khớp mật khẩu, nên nhập đúng trong lúc đang
+khóa vẫn bị từ chối (không có đường lách khóa bằng mật khẩu đúng). **Giới hạn đã biết, không tự
+nhận là chống brute-force cấp doanh nghiệp**: khóa theo TỪNG SÁCH (không theo IP), nên một kẻ cố
+tình có thể chủ động khóa link của chính chủ sở hữu bằng cách nhập sai liên tục — đánh đổi chấp
+nhận được ở quy mô pilot, giống model "mật khẩu bài viết" của WordPress, không hứa là DRM (đúng
+tinh thần PLAN.md mục 7 "không quảng bá như DRM").
+
+FE: `apps/web/src/components/PublicBookReader.tsx` (logic dùng chung cho `/read/:permalink` và
+`/read/:permalink/embed` — tách ra vì cả 2 đường đều phải giữ đúng gate mật khẩu, không lặp code
+2 lần) xử lý 403 `{passwordRequired:true}` (mở rộng `ApiError` ở `lib/api.ts` để giữ nguyên body
+JSON lỗi, không chỉ message string) bằng form nhập mật khẩu; token lưu `sessionStorage` (mất khi
+đóng tab, đúng ý "phải nhập lại mỗi phiên" hơn `localStorage` vĩnh viễn), gắn vào request JSON
+qua header `Authorization`, gắn vào `<img>`/`<a>` (không set được header tùy ý) qua query
+`?token=`. Dashboard (`dashboard/books/[id]/page.tsx`) có UI đặt/đổi/xóa mật khẩu qua
+`PUT /books/:id/settings` (DTO `password`/`removePassword` mới).
+
+**Đã kiểm thử THẬT (không suy diễn)**: bộ test tích hợp mới `tests/integration/p3_e2e.test.js`
+(33/33 PASS, gọi HTTP thật vào API đang chạy) phủ: xem trước khi đặt mật khẩu, chặn 403 sau khi
+đặt, sai mật khẩu, đúng mật khẩu nhận token, token dùng qua cả header lẫn query, ảnh trang bị
+chặn nếu không token, đổi mật khẩu vô hiệu token cũ ngay, khóa sau đủ số lần sai, mật khẩu đúng
+KHÔNG bypass được khi đang khóa, xóa mật khẩu trả về công khai. Ngoài ra đã tự tay kiểm thử qua
+Claude Browser trên Docker thật (không phải mock): đăng nhập Creator qua UI, đặt mật khẩu qua
+dashboard, mở `/read/:permalink` ở tab ẩn danh khác thấy đúng form khóa, nhập sai thấy đúng
+thông báo "còn N lần thử", nhập đúng vào xem được sách, network tab xác nhận ảnh trang tải qua
+`?token=` thành công, xóa mật khẩu qua UI thấy sách công khai lại ngay.
+
+**F11 — Tải PDF gốc**: route mới `GET /public/books/:permalink/download`, kiểm tra CẢ hai tầng
+(TypeScript VÀ hàm SQL `public_get_source_pdf` đều tự kiểm `allow_download=true`, giống nguyên
+tắc phòng vệ 2 lớp của `0006_public_reader.sql`) — nếu 1 tầng có bug, tầng kia vẫn chặn. Cũng đi
+qua đúng gate mật khẩu F05 (sách có mật khẩu thì tải xuống cũng cần token hợp lệ). FE: nút tải
+(`⇩`) trong `FlipBook.tsx` chỉ hiện khi `allowDownload=true`, dùng `<a href download>` (không
+fetch/blob) để trình duyệt tự xử lý `Content-Disposition` chuẩn. Đã kiểm thử thật: script P3 xác
+nhận byte đầu file đúng chữ ký `%PDF-` và có header `Content-Disposition: attachment`; qua Claude
+Browser xác nhận `fetch()` tới đúng URL (kèm token khi cần) trả về 200/`application/pdf`/đúng
+kích thước file gốc.
+
+**F07 — Replace PDF / publish nguyên tử / rollback**: khảo sát code trước khi làm mới phát hiện
+model dữ liệu (`revisions` + `books.published_revision_id`) VÀ luồng upload/publish sẵn có từ P2
+ĐÃ đáp ứng gần hết yêu cầu ROADMAP.md ("tạo revision mới, preview, publish nguyên tử; giữ book
+ID/permalink/cấu hình; lỗi vẫn đọc được revision cũ") mà không cần sửa gì — publish 1 lần
+UPDATE duy nhất, thất bại (vd revisionId sai) không đụng tới `published_revision_id` hiện tại;
+"rollback" chỉ đơn giản là publish lại một revisionId CŨ (dashboard vẫn hiện nút Publish cho mọi
+revision `ready`, kể cả bản cũ hơn bản đang publish). Vì vậy phần việc thật sự của F07 lần này là
+XÁC MINH bằng test thật, không phải viết code mới — bổ sung vào `p3_e2e.test.js`: upload+publish
+v2 đè lên v1 (permalink không đổi, nội dung reader đổi đúng sang v2), rồi publish lại v1
+(rollback thật, không tạo revision mới) xác nhận permalink/nội dung quay lại đúng v1, và publish
+1 revisionId không tồn tại xác nhận KHÔNG làm hỏng revision đang publish. Không sửa UI thêm vì
+đã đủ rõ (nút Publish disable đúng khi là revision đang active).
+
+**F09 — Embed iframe**: route mới `apps/web/src/app/read/[permalink]/embed/page.tsx`, dùng
+chung `PublicBookReader` (KHÔNG bớt gate mật khẩu như PLAN.md yêu cầu "giữ đầy đủ mật
+khẩu/quyền") — đã tự kiểm thử qua Claude Browser: mở `/embed` ở tab hoàn toàn mới (không có
+token trong sessionStorage) VẪN thấy đúng form khóa mật khẩu, không lộ nội dung qua "cửa sau"
+embed. Dashboard sinh sẵn đoạn mã `<iframe>` (responsive, `aspect-ratio` xấp xỉ, không kích
+thước cứng) kèm nút sao chép. **Chưa kiểm thử**: nhúng thật vào một trang HTML/site khác để xem
+layout khi ở trong iframe của bên thứ ba (chỉ xác nhận route `/embed` tự nó chạy đúng, không lồng
+thử trong iframe thật).
+
+**F08 — Chia sẻ mạng xã hội + Open Graph**: `FlipBook.tsx` thêm nút chia sẻ (sao chép link,
+Facebook, LinkedIn, và `navigator.share` khi trình duyệt hỗ trợ) — đúng PLAN.md mục 5 ("mở giao
+diện chia sẻ của nền tảng, không tự nhận đã đăng"). Đã chuyển `read/[permalink]/page.tsx` từ
+Client Component sang Server Component (`generateMetadata` async) để Open Graph render
+SERVER-SIDE thật (PLAN.md mục 5: "để bot đọc được") — xác minh bằng `curl` HTML trả về từ server
+(không phải đọc DOM sau khi JS chạy), thấy đúng `<title>`/`og:title`/`og:description`/`og:image`
+cho sách công khai, và tự động rơi về tiêu đề chung "MISA Flipbook" (không lộ tên/ảnh sách) khi
+sách có mật khẩu — đúng yêu cầu PLAN.md "mặc định hiển thị tên ứng dụng/ảnh chung" cho sách có
+mật khẩu, đạt được TỰ NHIÊN vì fetch phía server dùng đúng API đã có gate mật khẩu, không cần
+thêm logic riêng. Phát sinh 1 chi tiết hạ tầng thật (không phải suy đoán): code server-side chạy
+TRONG container `web`, không gọi được `localhost:3000` như trình duyệt (đó là port của chính
+container `web`, không phải `api`) — phải thêm biến môi trường runtime `API_INTERNAL_BASE_URL`
+(`http://api:3000`, DNS nội bộ Docker Compose) riêng cho fetch phía server, khác hẳn
+`NEXT_PUBLIC_API_BASE_URL` (URL cho trình duyệt) đã có từ trước; đã tự kiểm bằng `curl` sau khi
+rebuild thấy hoạt động đúng, KHÔNG chỉ giả định là chạy được.
+**Chưa làm** (giới hạn còn mở, ghi rõ để không nhận vơ đã xong): cột `book_settings.public_preview`
+(có sẵn từ schema P1, chưa dùng ở đâu) đáng ra dùng để Creator chủ động "cho phép lộ tiêu đề/ảnh"
+cho sách có mật khẩu (PLAN.md mục 5) — hiện sách có mật khẩu LUÔN rơi về tiêu đề chung, chưa có
+đường để Creator bật lộ thông tin có kiểm soát; đây là backlog riêng, chưa nằm trong yêu cầu P3
+lần này (P3 chỉ yêu cầu mặc định an toàn, không yêu cầu cơ chế bật lộ). `navigator.share` chỉ xác
+nhận ĐÚNG LOGIC hiển thị có điều kiện (ẩn nút khi API không tồn tại) qua browser pane — pane dùng
+để test không có `navigator.share` nên chưa tự tay bấm thử share sheet thật trên thiết bị có hỗ
+trợ. Nút "Sao chép link" bị `NotAllowedError: Write permission denied` khi bấm qua Claude Browser
+(quyền clipboard bị chặn ở tầng tự động hoá của công cụ, không phải lỗi code — đã xác nhận bằng
+`navigator.clipboard.writeText` ném lỗi y hệt khi gọi trực tiếp qua console) — đã xác nhận ĐƯỜNG
+LỖI dự phòng hoạt động đúng (hiện thông báo "Khong sao chep duoc..." thay vì crash), nhưng chưa
+xác nhận đường THÀNH CÔNG thật trong một phiên trình duyệt bình thường có quyền clipboard.
+
+Sau P3: CORS API thêm `exposedHeaders: ["Content-Disposition"]` (main.ts) — chi tiết nhỏ nhưng
+đúng chuẩn cho endpoint download, không ảnh hưởng hành vi hiện tại vì FE dùng `<a download>`
+(điều hướng, không `fetch()`) nên không phụ thuộc JS đọc được header này.
+
+Đã chạy lại TOÀN BỘ 4 bộ test tích hợp sau cùng một lượt (không chỉ bộ mới) để xác nhận không hồi
+quy: `tenant_isolation.test.js` 13/13, `api_e2e.test.js` 14/14, `p2_e2e.test.js` 16/16,
+`p3_e2e.test.js` 33/33 — tổng 76/76 PASS, chạy thật trên Docker (`docker compose build api web`
+rồi `up -d`), không phải chạy trên máy dev khác biệt với môi trường publish.
+
+Chưa bắt đầu: P4-P6, Git tag bản stable, và F15/F16/F17 (backlog PLAN.md mục 8, còn nguyên trạng
+thái mở như đã ghi ở lần cập nhật trước).
+Điểm stable gần nhất: chưa có (P1+P2+P3 xong nhưng chưa cắt tag).
 Handoff tài liệu: PLANNING-001 (draft); không coi là phần mềm có thể rollback.
-Bước tiếp theo: P3 theo ROADMAP.md (mật khẩu, download, replace/revision, embed, link share) —
-book_settings.password_hash đã có cột sẵn từ P1, cần thêm luồng nhập mật khẩu ở FE + kiểm tra ở
-`public_get_book`/`public_get_page_asset`; hoặc đóng các mục "chưa xong trong P2" ở trên nếu
-người dùng muốn cứng hoá P2 trước khi sang P3. F16 đã chốt đủ rõ để code khi vào lịch
-(xem PLAN.md mục 8: Admin luôn xem được sách Private + ghi audit; Private ưu tiên cao
-hơn mật khẩu F05). Test tự động cho FE (Playwright) đáng cân nhắc trước khi
-làm thêm tương tác phức tạp hơn (P4: hyperlink overlay, media, hoặc F17 zoom).
+Bước tiếp theo: P4 theo ROADMAP.md (hyperlink hoàn chỉnh, media trong phạm vi PoC, GA4, dashboard
+Admin) — hoặc đóng public_preview/F15/F16/F17 nếu người dùng muốn xử lý backlog trước. Test tự
+động cho FE (Playwright) vẫn đáng cân nhắc trước khi vào P4 (nhiều tương tác client hơn: overlay
+hyperlink, media, zoom F17).
+
+## Redesign UI: i18n (next-intl) + Xoăn Design System (XDS) + mobile-native (2026-09-17)
+
+Yêu cầu người dùng: (1) toàn bộ text UI phải là tiếng Việt có dấu chuẩn UTF-8 (trước đó 100%
+string trong `apps/web` viết ASCII không dấu kiểu "Dang nhap"); (2) thêm i18n, dựng sẵn chuyển
+ngữ Việt/Anh tự động; (3) làm lại UI theo skill Xoăn Design System; (4) mobile phải như native
+app thật cho cả 6 màn hình, không phải responsive co giãn từ desktop. Kế hoạch đầy đủ ở
+`C:\Users\A04-0035\.claude\plans\lazy-sprouting-scroll.md`.
+
+**i18n**: `next-intl@^4.14.5` (bump tu ^3.26 vi peerDependencies cua v3 chi ho tro toi
+next@15, repo nay pin next@16.3.5). Chon co tinh: **khong tien to URL** — locale doc/ghi qua
+cookie (`locale=vi|en`), khong dung routing `[locale]`, de permalink `/read/:permalink` (F02)
+khong doi cau truc theo ngon ngu. Catalog day du o `apps/web/messages/{vi,en}.json`, chia theo
+namespace (common/auth/dashboard/bookDetail/reader). Doi ngon ngu qua dialog Cai dat (icon gear
+tren header/top bar) → set cookie + `router.refresh()`, KHONG doi URL — da tu kiem chung that:
+bam doi Viet→Anh tren dialog Cai dat, toan bo label doi dung ngay, `location.href` (kiem qua
+`javascript_tool`) khong doi mot ky tu nao.
+
+**XDS**: `apps/web` la React/Next.js (khong phai Vue 3) nen ap dung dung "Uu tien 2" bat buoc
+cua skill: doc truc tiep tung file `.vue` goc trong `ui/components/` (khong doan tu anh chup)
+roi viet lai bang React, giu nguyen class Tailwind/token. Da port ~13 component
+(`apps/web/src/components/xds/`): XButton, XInput, XTextarea, XCheckbox, XSwitch, XTag,
+XProgress, XEmptyState, XDialog, XToast(+Provider/hook), XDropdownMenu (rut gon), XHeaderBar,
+XSettingsDialog, XIcon (Tabler, stroke 1.5, khong inline SVG rai rac). Token/theme
+(`tokens.css`, `theme-blue.css`) va font Inter chep NGUYEN VAN tu skill vao
+`apps/web/src/styles/xds/`, khong tu khai bao bien `--xds-*` song song. Da xoa sach class CSS
+chet cu (`.btn/.card/.field/.badge/.book-tile`...) khoi `globals.css` sau khi xac nhan qua
+`Grep` khong con noi nao dung.
+
+**Mobile-native (ca 6 man hinh)**: moi trang render 2 cay JSX rieng (`hidden md:flex` desktop /
+`flex md:hidden` mobile voi class `.xds-mobile-app`), chuyen thuan Tailwind breakpoint
+`md:` (768px) — khong dung JS/media-query hook (tranh hydration mismatch/flicker). Mobile dung
+top bar rieng 56px + safe-area, danh sach hang phang (khong phai luoi the shrink tu desktop),
+touch target ≥48px qua `.xds-mobile-app` co san trong `tokens.css` cua skill. Da tu kiem chung
+qua Browser pane emulate 375×812 tren dashboard + book-detail: xac nhan dung top bar/FAB/hang
+phang, KHONG phai ban desktop co lai.
+
+**2 bug thật phát hiện và sửa khi tự kiểm tay (không chỉ đọc code)**:
+1. **Hydration mismatch toàn app** (`Minified React error #418` mọi trang) — root cause:
+   `XToast.tsx` (component gắn ở `RootLayout`, nên chạy trên MỌI trang) kiểm tra
+   `typeof document !== "undefined"` trực tiếp trong JSX để quyết định có `createPortal` hay
+   không; do `document` luôn tồn tại ngay ở lần render đầu tiên trên client (khác server, nơi
+   `document` không tồn tại khi SSR) nên cây client lệch cây server ngay từ đầu — không phải do
+   `preview`/`window.location.origin` như nghi ngờ ban đầu. Phát hiện bằng cách chạy tạm
+   `next dev` (port 3055, ngoài Docker) để lấy overlay lỗi KHÔNG bị minify, overlay chỉ thẳng
+   dòng `XToast.tsx:50` và component nghi phạm. Sửa bằng pattern chuẩn: thêm state
+   `mounted` (`useState(false)` + `useEffect(() => setMounted(true), [])`) thay cho kiểm tra
+   `typeof document` trực tiếp trong JSX — đã rebuild Docker image thật, xác nhận lại bằng tab
+   trình duyệt SẠCH (chưa từng nạp trang) thấy "No console logs", và xác nhận publish thật
+   (nhánh code trước đó chưa test tới, dùng `window.location.origin`) cũng không còn lỗi.
+2. **Thông báo "Đã sao chép link!" trong menu Chia sẻ của reader không bao giờ hiện được** —
+   `XDropdownMenu` luôn đóng dropdown ngay sau khi chọn 1 mục (`onSelect?.(); setOpen(false);`),
+   trong khi `FlipBook.tsx` bản port đầu tiên hiển thị thông báo copy qua prop `extra` bên
+   TRONG chính dropdown đó → dropdown đóng tức thì, thông báo không kịp hiện. Sửa bằng cách bỏ
+   state `copyNotice`/prop `extra` (đã xoá luôn khỏi `XDropdownMenu.tsx` vì hết chỗ dùng), gọi
+   `useToast()` (hệ thống toast chung của app) từ `copyShareLink()` — đã tự bấm "Sao chép link"
+   thật trên public reader (sách demo có mật khẩu, đã unlock), xác nhận toast xanh "Đã sao chép
+   link!" hiện đúng góc trên phải.
+
+**Đã tự kiểm tay qua Docker thật + Browser pane** (không chỉ đọc code): tạo tenant/user/book
+QA tạm qua SQL (argon2 hash sinh từ chính container `api`), login qua UI thật; publish sách
+(dialog xác nhận → publish → status đổi `published`, public link hiện đúng); đặt mật khẩu xem
+sách (toast "Đã đặt mật khẩu xem sách." hiện đúng, nút đổi thành "Đổi mật khẩu"/"Bỏ mật khẩu");
+public reader unlock đúng mật khẩu, xem được nội dung PDF thật (ảnh trang render đúng — xác
+nhận luôn nghi vấn "thumbnail xem trước bị trắng" trước đó chỉ là hệ quả của bug hydration #1,
+không phải bug ảnh); menu Chia sẻ (Sao chép link/Facebook/LinkedIn, ẩn đúng mục "chia sẻ qua
+thiết bị" vì `navigator.share` không có trên desktop browser pane); đổi ngôn ngữ Việt↔Anh trên
+dialog Cài đặt, xác nhận URL không đổi; mobile 375×812 cho dashboard + book-detail. Đã dọn
+fixture QA tạm (tenant/user/book) bằng SQL theo đúng thứ tự FK-safe đã dùng ở P3.
+
+**Chưa kiểm chứng / giới hạn còn mở (ghi rõ, không nhận vơ)**:
+- Chưa tự bấm "Choose File" thật qua OS file picker (Browser pane dùng trong phiên này không
+  có action upload file) — luồng upload đã xác nhận qua `curl` multipart thẳng vào API (cùng
+  JWT/tenant với UI), tức là xác nhận được job/convert/preview nhưng KHÔNG xác nhận thao tác
+  click-mở-file-dialog thật.
+- Chưa tự bấm nút Xuất bản/Cài đặt/Chia sẻ trên viewport mobile (375×812) — chỉ mới xem layout,
+  chưa test tương tác thật ở kích thước mobile (chỉ test tương tác ở desktop + xem layout ở
+  mobile riêng).
+- `XDropdownMenu.tsx` là bản port RÚT GỌN của `XDropdownMenu.vue`: bỏ điều hướng bàn phím mũi
+  tên/active-item highlight đầy đủ của bản gốc, chỉ giữ định vị theo activator, đóng khi click
+  ngoài/Esc.
+- `XHeaderBar.tsx` mặc định `showSearch=false` (ẩn hẳn ô tìm kiếm) khác bản gốc Vue
+  (`default: true`) vì app hiện chưa có nhu cầu tìm kiếm xuyên sách.
+- Icon Facebook/LinkedIn trong menu chia sẻ dùng icon Tabler trung tính (`share`/`external-link`)
+  + nhãn chữ, KHÔNG phải logo thương hiệu thật — vì bộ icon XDS core không có icon mạng xã hội
+  và luật "chỉ Tabler, không trộn nguồn SVG khác" là bắt buộc.
+- Không có icon globe/ngôn ngữ riêng trên header (bộ icon XDS không có) → gộp chọn ngôn ngữ vào
+  dialog Cài đặt mở từ nút Settings, đúng tinh thần header tối giản của XDS (chỉ Settings +
+  Avatar ở cụm phải) nhưng khác với cách một số app khác đặt icon globe riêng.
+- Chưa test Reader/embed ở goc do (landscape) hoac man hinh rat nho (<360px).
+
+Đã chạy lại TOÀN BỘ 4 bộ test tích hợp (không đổi BE trong đợt này) để xác nhận không hồi quy:
+`tenant_isolation.test.js` 13/13, `api_e2e.test.js` 14/14, `p2_e2e.test.js` 16/16,
+`p3_e2e.test.js` 33/33 — tổng 76/76 PASS, chạy that tren Docker sau khi rebuild image `web`.
+
+Bước tiếp theo: hỏi người dùng có muốn commit (kèm cả phần P3 trước đó, cũng chưa commit) hay
+không; nếu tiếp tục, cân nhắc test tương tác thật trên mobile viewport và luồng upload qua
+Claude-in-Chrome (có action file_upload) thay vì chỉ curl.
 
 ## Cách cập nhật
 Sau mỗi đợt công việc, ghi: đã đổi gì, quyết định/giả định mới, test nào thực sự chạy, kết quả/lỗi, commit và bước kế tiếp.

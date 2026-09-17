@@ -1,3 +1,10 @@
+const createNextIntlPlugin = require("next-intl/plugin");
+
+// Khong dung routing [locale] cua next-intl (khong tien to /vi//en/ trong URL) -
+// permalink cong khai /read/:permalink phai giu nguyen bat ke locale (F02, da test).
+// Locale doc/ghi qua cookie, xem src/i18n/request.ts.
+const withNextIntl = createNextIntlPlugin("./src/i18n/request.ts");
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: "standalone",
@@ -9,4 +16,4 @@ const nextConfig = {
   },
 };
 
-module.exports = nextConfig;
+module.exports = withNextIntl(nextConfig);

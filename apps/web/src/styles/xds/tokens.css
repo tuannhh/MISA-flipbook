@@ -1,0 +1,384 @@
+/**
+ * Xoăn Design System (XDS) — Design tokens
+ * Giá trị đo trực tiếp từ bản export chính thức của XDS Web Components.
+ * Import file này (hoặc copy biến vào hệ thống theme của project) và LUÔN dùng
+ * biến thay vì hard-code mã màu.
+ */
+:root {
+  /* ── Thang Brand — theme Blue mặc định ─────────────
+     10 theme chính thức trong tokens/themes/*.css (blue, indigo, cyan, teal,
+     green, orange, red, pink, purple, blue-gray). Muốn đổi theme: import file
+     theme tương ứng hoặc đặt data-xds-theme="<tên>" — KHÔNG tự chế màu. */
+  --xds-brand-50: #F0F6FE;
+  --xds-brand-100: #DDEAFC;
+  --xds-brand-200: #C2DBFB;
+  --xds-brand-300: #99C5F7;
+  --xds-brand-400: #68A6F2;
+  --xds-brand-500: #4584EC;
+  --xds-brand-600: #245FDF;        /* Brand default */
+  --xds-brand-700: #2753CE;
+  --xds-brand-800: #2644A7;
+  --xds-brand-900: #243D84;
+  --xds-brand: var(--xds-brand-600);
+
+  /* ── Màu thương hiệu / trạng thái ───────────────────────── */
+  --xds-primary: var(--xds-brand); /* nút primary, focus, link */
+  --xds-selected: #4262F0;         /* trạng thái selected (date picker...) */
+  --xds-danger: #F04438;           /* lỗi, xóa, cảnh báo nghiêm trọng */
+  --xds-success: #12B76A;
+  --xds-warning: #F79009;
+  --xds-info: #2E90FA;
+  /* Màu nền trạng thái dùng solid token để chạy ổn trên WebView cũ không có color-mix(). */
+  --xds-danger-soft: #FDE9E7;
+  --xds-success-soft: #E3F8EF;
+  --xds-warning-soft: #FEF2E1;
+  --xds-info-soft: #E6F2FF;
+  --xds-purple: #9E77ED;
+
+  /* ── Văn bản & icon ─────────────────────────────────────── */
+  --xds-text: #10141B;             /* chữ chính (Neutral/950 — khớp demo chuẩn & themes/*.css) */
+  --xds-text-secondary: #6B707A;   /* chữ phụ (Neutral/700) */
+  --xds-text-placeholder: #9DA2AC;
+  --xds-text-muted: #99A1B2;       /* chữ phụ/ngoài phạm vi (vd: ngày ngoài tháng) */
+  --xds-icon-neutral: #6B707A;     /* màu icon mặc định */
+  --xds-text-ai: #1482FF;          /* text/stroke tính năng AI; button AI dùng gradient 110deg #1482FF→#CF11FF */
+
+  /* ── Nền & viền ─────────────────────────────────────────── */
+  --xds-bg: #FFFFFF;
+  --xds-bg-page: #ECEDEF;          /* nền xám của vùng content */
+  --xds-bg-disabled: #F2F2F4;
+  --xds-bg-hover-soft: #E7EBFD;    /* hover/range nhạt */
+  /* Stroke = tham chiếu chính thang Neutral (xác nhận từ giám đốc thiết kế) */
+  --xds-neutral-200: #ECEDEF;
+  --xds-neutral-300: #E9EAEB;
+  --xds-neutral-400: #CED1D6;
+  --xds-border: var(--xds-neutral-400);          /* Stroke Neutral — viền mặc định */
+  --xds-border-light: var(--xds-neutral-300);    /* Stroke Neutral Light — phân tách rất nhẹ (header/sub-nav/kẻ trong card) */
+  --xds-border-divider: var(--xds-neutral-300);  /* Divider */
+  --xds-border-disable: var(--xds-neutral-200);  /* Stroke Neutral Disable */
+  --xds-alpha-black-100: rgba(0,0,0,0.10);       /* Alpha-Black-100 — dùng cho shadow-card */
+
+  /* ── Typography (Inter Variable v4 — font thống nhất toàn hệ thống) ─
+     Self-host InterVariable.woff2 thật (weight 100–900) qua assets/fonts/inter.css;
+     alias 'Inter var' giữ tương thích ngược nếu project khác đã cài theo tên đó.
+     Bật 'tnum','lnum' để số liệu thẳng cột. */
+  --xds-font-family: InterVariable, 'Inter var', 'Inter', -apple-system, 'Segoe UI', sans-serif;
+  --xds-font-size-body: 13px;      /* Body Regular 13/18 — mặc định mọi text */
+  --xds-line-height-body: 18px;
+  --xds-font-size-body-lg: 16px;   /* Body Large 16/20 — văn bản dài, rich text */
+  --xds-line-height-body-lg: 20px;
+  --xds-font-size-h3: 16px;        /* H3 16/22 — tiêu đề form/card/section/group */
+  --xds-line-height-h3: 22px;
+  --xds-font-size-h2: 20px;        /* H2 20/28 — tiêu đề app/page */
+  --xds-line-height-h2: 28px;
+  --xds-font-size-h1: 24px;        /* H1 24/36 — tiêu đề banner */
+  --xds-line-height-h1: 36px;
+
+  /* ── Kích thước control (mật độ Trung bình — mặc định) ────
+     Density: data-density="compact" → btn/input 28px, row 32px;
+              data-density="comfortable" → btn 36px, input 40px, row 40px. */
+  --xds-btn-height: 32px;
+  --xds-btn-min-width: 80px;
+  --xds-input-height: 36px;
+  --xds-dt-row-height: 36px;       /* row 1 dòng — đổi theo density */
+  --xds-dt-row-height-2: 56px;     /* row 2 dòng — CỐ ĐỊNH */
+  --xds-dt-row-height-3: 72px;     /* row 3 dòng — CỐ ĐỊNH */
+
+  /* ── Radius scale ───────────────────────────────────────── */
+  --xds-radius-sm: 4px;            /* chi tiết nhỏ */
+  --xds-radius-inner: 6px;         /* phần tử lồng trong control */
+  --xds-radius-default: 8px;       /* button, input, card, badge */
+  --xds-radius-dialog: 12px;       /* dialog, popover, context menu */
+  --xds-radius-pill: 9999px;
+  --xds-radius-input: 8px;         /* alias cũ — giữ tương thích */
+  --xds-radius-popup: 12px;        /* dropdown/popover bo 12px theo demo chuẩn */
+
+  /* ── Layout ─────────────────────────────────────────────── */
+  --xds-layout-header-h: 48px;
+  --xds-layout-subnav-h: 48px;
+  --xds-layout-page-header-h: 56px;
+  --xds-layout-sidebar-w: 200px;
+  --xds-layout-sidebar-sm-w: 64px;
+
+  /* ── Shadow ─────────────────────────────────────────────── */
+  /* BẮT BUỘC cho mọi box trắng trên nền xám (Drop Shadow/Neutral/All 2).
+     Dùng: border-radius:8px; background:#FFF; box-shadow: var(--xds-shadow-card); */
+  --xds-shadow-card: 0 0 2px 0 var(--xds-alpha-black-100);
+  --xds-shadow-sm: 0 1px 2px rgba(16,24,40,0.05);
+  --xds-shadow-md: 0 4px 8px -2px rgba(16,24,40,0.10), 0 2px 4px -2px rgba(16,24,40,0.06);
+  --xds-shadow-lg: 0 12px 16px -4px rgba(16,24,40,0.08), 0 4px 6px -2px rgba(16,24,40,0.03);
+  --xds-shadow-dialog: 0 8px 24px rgba(16,24,40,0.15);
+
+  /* ── Hình nền + hiệu ứng kính (header-bar.md mục 3 "Hình nền") ──── */
+  --xds-wallpaper-image: none;
+  --xds-glass-bg: rgba(255,255,255,0.78);
+  --xds-glass-border: rgba(255,255,255,0.6);
+  --xds-glass-dropdown-bg: rgba(255,255,255,0.95);
+
+  /* ── Chart palette (series chính lấy brand theme hiện tại) ─ */
+  --xds-chart-c1: var(--xds-brand-600);
+  --xds-chart-c2: #12B76A;
+  --xds-chart-c3: #F79009;
+  --xds-chart-c4: #F04438;
+  --xds-chart-c5: #0BA5EC;
+  --xds-chart-c6: #7A5AF8;
+
+  /* ── Icon (stroke 1.5px, vùng chạm tối thiểu 40px) ──────── */
+  --xds-icon-stroke: 1.5px;
+  --xds-icon-xs: 12px;
+  --xds-icon-sm: 16px;
+  --xds-icon-md: 20px;
+  --xds-icon-lg: 24px;             /* kích thước mặc định */
+  --xds-icon-xl: 32px;
+  --xds-icon-touch-target: 40px;
+
+  /* ── Mobile mini-app trong native host ──────────── */
+  --xds-mobile-touch-target: 48px;
+  --xds-mobile-topbar-height: 56px;
+  --xds-mobile-bottom-nav-height: 64px;
+  --xds-mobile-gutter: 16px;
+  --xds-mobile-safe-top: env(safe-area-inset-top, 0px);
+  --xds-mobile-safe-right: env(safe-area-inset-right, 0px);
+  --xds-mobile-safe-bottom: env(safe-area-inset-bottom, 0px);
+  --xds-mobile-safe-left: env(safe-area-inset-left, 0px);
+}
+
+/* ── Density overrides ─────────────────────────────────────
+   Đặt data-density="compact"|"comfortable" trên <html>; bỏ thuộc tính
+   (hoặc "medium") = mật độ Trung bình mặc định ở khối :root phía trên. */
+:root[data-density="compact"] {
+  --xds-btn-height: 28px;
+  --xds-input-height: 28px;
+  --xds-dt-row-height: 32px;
+}
+:root[data-density="comfortable"] {
+  --xds-btn-height: 36px;
+  --xds-input-height: 40px;
+  --xds-dt-row-height: 40px;
+}
+
+/* Root bắt buộc của mini-app. Mobile ưu tiên khả năng chạm, không kế thừa
+   mật độ desktop hiện tại và không để iOS zoom khi focus input. */
+.xds-mobile-app {
+  --xds-btn-height: var(--xds-mobile-touch-target);
+  --xds-input-height: var(--xds-mobile-touch-target);
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  min-height: 100%;
+  overflow-x: hidden;
+  padding-right: var(--xds-mobile-safe-right);
+  padding-left: var(--xds-mobile-safe-left);
+  font-family: var(--xds-font-family);
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+}
+
+@supports (container-type: inline-size) {
+  .xds-mobile-app {
+    container-type: inline-size;
+  }
+}
+
+.xds-mobile-app *,
+.xds-mobile-app *::before,
+.xds-mobile-app *::after {
+  box-sizing: border-box;
+}
+
+.xds-mobile-app img,
+.xds-mobile-app video,
+.xds-mobile-app canvas,
+.xds-mobile-app svg {
+  max-width: 100%;
+}
+
+.xds-mobile-app input,
+.xds-mobile-app textarea {
+  font-size: 16px;
+}
+
+.xds-mobile-app button,
+.xds-mobile-app [role="tab"] {
+  white-space: nowrap;
+}
+
+.xds-mobile-app [role="tab"],
+.xds-mobile-app [role="radiogroup"] label {
+  min-height: var(--xds-mobile-touch-target);
+}
+
+/* Utility chống va chạm cho mini-app: áp vào vùng chart/shape và text một dòng. */
+.xds-mobile-app .xds-mobile-clip-region {
+  min-width: 0;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.xds-mobile-app .xds-mobile-gutter-x {
+  padding-right: var(--xds-mobile-gutter);
+  padding-left: var(--xds-mobile-gutter);
+}
+
+.xds-mobile-app .xds-mobile-single-line {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.xds-mobile-app .xds-mobile-readable {
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+/* iOS <= 14.4 chưa hỗ trợ flex-gap. Không thể feature-detect flex-gap bằng
+   @supports, nên vùng trọng yếu dùng sibling margin ổn định trên mọi WebView. */
+.xds-mobile-app .xds-button,
+.xds-mobile-app .xds-tag,
+.xds-mobile-app .xds-mobile-row-gap-1,
+.xds-mobile-app .xds-mobile-row-gap-2,
+.xds-mobile-app .xds-mobile-row-gap-3,
+.xds-mobile-app .xds-mobile-row-gap-4,
+.xds-mobile-app .xds-mobile-column-gap-1,
+.xds-mobile-app .xds-mobile-column-gap-2,
+.xds-mobile-app .xds-mobile-column-gap-4 {
+  gap: 0;
+}
+
+.xds-mobile-app .xds-button > * + * {
+  margin-left: 6px;
+}
+
+.xds-mobile-app .xds-tag > * + *,
+.xds-mobile-app .xds-mobile-row-gap-1 > * + * {
+  margin-left: 4px;
+}
+
+.xds-mobile-app .xds-mobile-row-gap-2 > * + * {
+  margin-left: 8px;
+}
+
+.xds-mobile-app .xds-mobile-row-gap-3 > * + * {
+  margin-left: 12px;
+}
+
+.xds-mobile-app .xds-mobile-row-gap-4 > * + * {
+  margin-left: 16px;
+}
+
+.xds-mobile-app .xds-mobile-column-gap-1 > * + * {
+  margin-top: 4px;
+}
+
+.xds-mobile-app .xds-mobile-column-gap-2 > * + * {
+  margin-top: 8px;
+}
+
+.xds-mobile-app .xds-mobile-column-gap-4 > * + * {
+  margin-top: 16px;
+}
+
+/* 320px và cửa sổ chia đôi: ưu tiên một cột, khoảng đệm 12px, tuyệt đối không ép nội dung. */
+@media (max-width: 359px) {
+  .xds-mobile-app {
+    --xds-mobile-gutter: 12px;
+  }
+
+  .xds-mobile-app .xds-mobile-kpi-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .xds-mobile-app .xds-mobile-detail-summary-media {
+    width: 96px;
+    height: 68px;
+  }
+
+  .xds-mobile-app .xds-mobile-list-thumbnail {
+    width: 72px;
+    height: 52px;
+  }
+
+  .xds-mobile-app .xds-mobile-metadata-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+    align-items: start;
+  }
+
+  .xds-mobile-app .xds-mobile-metadata-row > :last-child {
+    width: auto;
+    text-align: left;
+  }
+}
+
+/* Enhancement cho mini-app chạy trong split view/nested native container: media
+   query ở trên là fallback cho WebView cũ, container query xử lý host hiện đại. */
+@container (max-width: 359px) {
+  .xds-mobile-app .xds-mobile-gutter-x {
+    padding-right: 12px;
+    padding-left: 12px;
+  }
+
+  .xds-mobile-app .xds-mobile-kpi-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .xds-mobile-app .xds-mobile-detail-summary-media {
+    width: 96px;
+    height: 68px;
+  }
+
+  .xds-mobile-app .xds-mobile-list-thumbnail {
+    width: 72px;
+    height: 52px;
+  }
+
+  .xds-mobile-app .xds-mobile-metadata-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+    align-items: start;
+  }
+
+  .xds-mobile-app .xds-mobile-metadata-row > :last-child {
+    width: auto;
+    text-align: left;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .xds-mobile-app *,
+  .xds-mobile-app *::before,
+  .xds-mobile-app *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
+
+/* ── Hình nền + hiệu ứng kính ────────────────────────────────
+   XSettingsDialog tab "Hình nền" set data-xds-wallpaper (id) +
+   data-xds-glass="true" trên <html> khi chọn wallpaper khác "Không có"
+   (header-bar.md mục 3). Áp wallpaper lên nền trang; card/table/dropdown
+   dùng class .xds-card / .xds-dropdown-glass để ăn hiệu ứng kính —
+   header, sidebar, dialog KHÔNG có 2 class này nên vẫn solid như spec. */
+:root[data-xds-wallpaper] body {
+  background-image: var(--xds-wallpaper-image);
+  background-size: cover;
+  background-position: center;
+  background-attachment: fixed;
+}
+:root[data-xds-glass="true"] .xds-card {
+  background: var(--xds-glass-bg);
+  backdrop-filter: blur(15px);
+  -webkit-backdrop-filter: blur(15px);
+  border: 1px solid var(--xds-glass-border);
+}
+:root[data-xds-glass="true"] .xds-dropdown-glass {
+  background: var(--xds-glass-dropdown-bg);
+  backdrop-filter: blur(15px);
+  -webkit-backdrop-filter: blur(15px);
+}

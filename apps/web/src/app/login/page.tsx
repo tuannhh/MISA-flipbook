@@ -1,12 +1,36 @@
 "use client";
-import { FormEvent, useState } from "react";
+import { FormEvent, ReactNode, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { apiFetch, ApiError } from "@/lib/api";
 import { setToken, setTenantId } from "@/lib/auth";
 import type { Me, Membership } from "@/lib/types";
+import { XInput } from "@/components/xds/XInput";
+import { XButton } from "@/components/xds/XButton";
+
+// Man hinh chua dang nhap - khong co XHeaderBar (khong co gi de dieu huong).
+// Van tach 2 cay DOM desktop/mobile (an qua Tailwind hidden/md:hidden) de dung
+// dung .xds-mobile-app tren mobile (touch target 48px, input khong bi iOS
+// zoom - dinh nghia san trong tokens.css), thay vi responsive co giao 1 layout.
+function Shell({ mobile, children }: { mobile: boolean; children: ReactNode }) {
+  return (
+    <div
+      className={
+        mobile
+          ? "xds-mobile-app flex min-h-dvh md:hidden items-center justify-center px-4"
+          : "hidden min-h-dvh md:flex items-center justify-center px-4"
+      }
+    >
+      <div className="w-full max-w-[380px] rounded-lg bg-[var(--xds-bg)] p-6 shadow-[var(--xds-shadow-card)]">
+        {children}
+      </div>
+    </div>
+  );
+}
 
 export default function LoginPage() {
   const router = useRouter();
+  const t = useTranslations("auth");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -26,7 +50,7 @@ export default function LoginPage() {
       const me = await apiFetch<Me>("/me", { token: accessToken });
       const activeMemberships = me.memberships.filter((m) => m.status === "active");
       if (activeMemberships.length === 0) {
-        setError("Tai khoan nay chua thuoc tenant nao (khong co quyen Creator o bat ky don vi nao).");
+        setError(t("errorNoTenant"));
         return;
       }
       if (activeMemberships.length === 1) {
@@ -36,7 +60,7 @@ export default function LoginPage() {
       }
       setMemberships(activeMemberships);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Dang nhap that bai.");
+      setError(err instanceof ApiError ? err.message : t("errorGeneric"));
     } finally {
       setLoading(false);
     }
@@ -47,48 +71,46 @@ export default function LoginPage() {
     router.replace("/dashboard");
   }
 
-  if (memberships) {
-    return (
-      <div className="page" style={{ maxWidth: 420, marginTop: 64 }}>
-        <h1>Chon don vi (tenant)</h1>
-        <p style={{ color: "var(--color-muted)" }}>Tai khoan cua ban thuoc nhieu don vi, chon 1 de tiep tuc.</p>
+  const tenantChooser = memberships && (
+    <>
+      <h1 className="mb-1 text-[20px] font-semibold leading-7 text-[var(--xds-text)]">{t("chooseTenantTitle")}</h1>
+      <p className="mb-4 text-[13px] text-[var(--xds-text-secondary)]">{t("chooseTenantSubtitle")}</p>
+      <div className="flex flex-col gap-2">
         {memberships.map((m) => (
-          <button
-            key={m.tenantId}
-            className="btn secondary"
-            style={{ width: "100%", justifyContent: "flex-start", marginBottom: 8 }}
-            onClick={() => chooseTenant(m.tenantId)}
-          >
+          <XButton key={m.tenantId} variant="neutral" className="w-full justify-start" onClick={() => chooseTenant(m.tenantId)}>
             {m.tenantName}
-          </button>
+          </XButton>
         ))}
-        <button className="btn secondary" style={{ marginTop: 12 }} onClick={() => setMemberships(null)}>
-          Quay lai
-        </button>
       </div>
-    );
-  }
+      <XButton variant="ghost" className="mt-3 w-full" onClick={() => setMemberships(null)}>
+        {t("back")}
+      </XButton>
+    </>
+  );
 
-  return (
-    <div className="page" style={{ maxWidth: 380, marginTop: 96 }}>
-      <h1 style={{ marginBottom: 4 }}>MISA Flipbook</h1>
-      <p style={{ color: "var(--color-muted)", marginTop: 0, marginBottom: 24 }}>Dang nhap Creator/Admin</p>
-      {error && <div className="error-box">{error}</div>}
-      <form onSubmit={handleLogin}>
-        <div className="field">
-          <label htmlFor="email">Email</label>
-          <input
-            id="email"
-            type="email"
-            required
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            autoComplete="username"
-          />
+  const loginForm = (
+    <>
+      <h1 className="mb-1 text-[20px] font-semibold leading-7 text-[var(--xds-text)]">{t("title")}</h1>
+      <p className="mb-6 text-[13px] text-[var(--xds-text-secondary)]">{t("subtitle")}</p>
+
+      {error && (
+        <div className="mb-3 rounded-lg border border-[var(--xds-danger)] bg-[var(--xds-danger-soft)] px-3 py-2 text-[13px] text-[var(--xds-danger)]">
+          {error}
         </div>
-        <div className="field">
-          <label htmlFor="password">Mat khau</label>
-          <input
+      )}
+
+      <form onSubmit={handleLogin} className="flex flex-col gap-4">
+        <div>
+          <label htmlFor="email" className="mb-1 block text-[13px] font-medium text-[var(--xds-text-secondary)]">
+            {t("emailLabel")}
+          </label>
+          <XInput id="email" type="email" required value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="username" />
+        </div>
+        <div>
+          <label htmlFor="password" className="mb-1 block text-[13px] font-medium text-[var(--xds-text-secondary)]">
+            {t("passwordLabel")}
+          </label>
+          <XInput
             id="password"
             type="password"
             required
@@ -97,10 +119,19 @@ export default function LoginPage() {
             autoComplete="current-password"
           />
         </div>
-        <button className="btn" type="submit" disabled={loading} style={{ width: "100%" }}>
-          {loading ? "Dang dang nhap..." : "Dang nhap"}
-        </button>
+        <XButton variant="primary" type="submit" size="lg" loading={loading} className="w-full">
+          {loading ? t("submitting") : t("submit")}
+        </XButton>
       </form>
-    </div>
+    </>
+  );
+
+  const content = memberships ? tenantChooser : loginForm;
+
+  return (
+    <>
+      <Shell mobile={false}>{content}</Shell>
+      <Shell mobile>{content}</Shell>
+    </>
   );
 }

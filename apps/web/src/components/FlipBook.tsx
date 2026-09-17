@@ -1,8 +1,12 @@
 "use client";
 import { forwardRef, useCallback, useEffect, useRef, useState } from "react";
 import HTMLFlipBook from "react-pageflip";
+import { useTranslations } from "next-intl";
 import type { ReaderPage } from "@/lib/types";
 import { useSimpleReaderMode } from "@/lib/useSimpleReaderMode";
+import { XIcon } from "@/components/xds/icons/XIcon";
+import { XDropdownMenu } from "@/components/xds/XDropdownMenu";
+import { useToast } from "@/components/xds/XToast";
 
 /**
  * Reader dung react-pageflip (bao StPageFlip, MIT license - xem MEMORYBANK.md muc
@@ -61,11 +65,18 @@ export function FlipBook({
   title,
   pages,
   imageUrl,
+  shareUrl,
+  downloadUrl,
 }: {
   title: string;
   pages: ReaderPage[];
   imageUrl: (assetId: string) => string;
+  /** F08: URL cong khai de chia se (copy/Facebook/LinkedIn). Bo trong = an het khu chia se. */
+  shareUrl?: string;
+  /** F11: URL tai PDF goc, chi truyen khi allow_download=true (null/undefined = an nut tai). */
+  downloadUrl?: string | null;
 }) {
+  const t = useTranslations("reader");
   const { simple, reducedMotion } = useSimpleReaderMode();
   const containerRef = useRef<HTMLDivElement>(null);
   const bookRef = useRef<{ pageFlip(): PageFlipApi } | null>(null);
@@ -114,33 +125,104 @@ export function FlipBook({
 
   const onFlip = useCallback((e: { data: number }) => setCurrentIndex(e.data), []);
 
+  const toast = useToast();
+  async function copyShareLink() {
+    if (!shareUrl) return;
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      toast("success", t("shareCopied"));
+    } catch {
+      toast("error", t("shareCopyFailed"));
+    }
+  }
+  async function nativeShare() {
+    if (!shareUrl) return;
+    if (navigator.share) {
+      // Xac nhan trong UI he dieu hanh la cua nguoi dung; khong tu bao "da dang" (PLAN.md
+      // muc 5: "khong hua tu dang len profile ca nhan", chi mo giao dien chia se).
+      try {
+        await navigator.share({ title, url: shareUrl });
+      } catch {
+        // Nguoi dung tu huy share sheet - khong phai loi.
+      }
+    } else {
+      await copyShareLink();
+    }
+  }
+
   const canGoPrev = currentIndex > 0;
   const canGoNext = currentIndex < pages.length - 1;
   const currentPage = pages[currentIndex] ?? pages[0];
   const rightPage = isSpreadCapable ? pages[currentIndex + 1] : null;
   const pageLabel =
     isSpreadCapable && rightPage && currentIndex > 0 && currentIndex < pages.length - 1
-      ? `Trang ${currentPage?.page}-${rightPage.page} / ${pages.length}`
-      : `Trang ${currentPage?.page ?? "-"} / ${pages.length}`;
+      ? t("pageLabelSpread", { from: currentPage?.page ?? 0, to: rightPage.page, total: pages.length })
+      : t("pageLabelSingle", { page: currentPage?.page ?? "-", total: pages.length });
 
   return (
     <div className="reader">
       <div className="reader-top">
-        <span>{title}</span>
-        <span>{pageLabel}</span>
+        <span className="reader-top-title">{title}</span>
+        <span className="reader-top-right">
+          <span>{pageLabel}</span>
+          {downloadUrl && (
+            <a className="reader-icon-btn" href={downloadUrl} download aria-label={t("download")} title={t("download")}>
+              <XIcon name="download" size={18} />
+            </a>
+          )}
+          {shareUrl && (
+            <XDropdownMenu
+              items={[
+                { key: "copy", label: t("shareCopyLink"), icon: "copy", onSelect: copyShareLink },
+                {
+                  key: "facebook",
+                  label: t("shareFacebook"),
+                  icon: "share",
+                  href: `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(shareUrl)}`,
+                  target: "_blank",
+                  rel: "noreferrer noopener",
+                },
+                {
+                  key: "linkedin",
+                  label: t("shareLinkedin"),
+                  icon: "share",
+                  href: `https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent(shareUrl)}`,
+                  target: "_blank",
+                  rel: "noreferrer noopener",
+                },
+                ...(typeof navigator !== "undefined" && "share" in navigator
+                  ? [{ key: "native", label: t("shareNative"), icon: "external-link" as const, onSelect: nativeShare }]
+                  : []),
+              ]}
+            >
+              {({ toggle, open }) => (
+                <button
+                  type="button"
+                  className="reader-icon-btn"
+                  onClick={toggle}
+                  aria-label={t("share")}
+                  aria-expanded={open}
+                  title={t("share")}
+                >
+                  <XIcon name="share" size={18} />
+                </button>
+              )}
+            </XDropdownMenu>
+          )}
+        </span>
       </div>
 
       <div className="reader-stage flipbook-stage" ref={containerRef}>
         {containerWidth > 0 && pages.length > 0 && (
           <>
             {canGoPrev && (
-              <button type="button" className="nav-zone left" onClick={goPrev} aria-label="Trang truoc">
-                &#8249;
+              <button type="button" className="nav-zone left" onClick={goPrev} aria-label={t("prevPage")}>
+                <XIcon name="chevron-left" size={28} />
               </button>
             )}
             {canGoNext && (
-              <button type="button" className="nav-zone right" onClick={goNext} aria-label="Trang sau">
-                &#8250;
+              <button type="button" className="nav-zone right" onClick={goNext} aria-label={t("nextPage")}>
+                <XIcon name="chevron-right" size={28} />
               </button>
             )}
             <HTMLFlipBook
@@ -177,7 +259,7 @@ export function FlipBook({
               onFlip={onFlip}
             >
               {pages.map((p) => (
-                <Page key={p.page} imageUrl={pageImg(p)} rotation={p.rotation} alt={`Trang ${p.page}`} />
+                <Page key={p.page} imageUrl={pageImg(p)} rotation={p.rotation} alt={t("pageLabelSingle", { page: p.page, total: pages.length })} />
               ))}
             </HTMLFlipBook>
           </>
@@ -185,10 +267,8 @@ export function FlipBook({
       </div>
 
       <div className="reader-bottom">
-        {simple
-          ? "Dung nut mui ten hoac bam hai ben de chuyen trang (che do don gian)"
-          : "Keo, vuot hoac dung phim mui ten de lat trang · MISA Flipbook"}
-        {reducedMotion ? " · da tat hieu ung theo cai dat thiet bi" : ""}
+        {simple ? t("hintSimple") : t("hintNormal")}
+        {reducedMotion ? t("hintReducedMotion") : ""}
       </div>
     </div>
   );

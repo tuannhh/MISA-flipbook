@@ -32,8 +32,30 @@ Theo chỉ đạo người dùng: ưu tiên bản chạy Docker; DevOps tự siz
   không phải slideshow/crossfade) theo yêu cầu người dùng, tự kiểm thử qua trình duyệt thật
   (desktop kéo/click/phím, mobile giả lập vuốt, chế độ 1/2 trang) — chi tiết, giới hạn còn
   mở (đơn giản hoá mặt sau lá lật ở bìa, chế độ đơn giản cho máy yếu chỉ xác nhận qua đọc
-  code) ở MEMORYBANK.md. Giới hạn còn mở khác: chưa có mật khẩu bảo vệ, chưa có trang Admin
-  trên FE, chưa có test tự động (Playwright) cho FE.
+  code) ở MEMORYBANK.md. Giới hạn còn mở khác (đã thu hẹp sau P3, xem dưới): chưa có trang
+  Admin trên FE, chưa có test tự động (Playwright) cho FE.
+- P3: **điều kiện đi tiếp đã đạt và kiểm chứng thật** — "Link giữ nguyên" (F07: publish
+  nguyên tử + rollback bằng publish lại revision cũ, permalink không đổi, đã test thật),
+  "protected assets không lộ" (F05 mật khẩu qua argon2 + book-access-token JWT ngắn hạn,
+  gate cả JSON/ảnh/download; F11 download kiểm 2 lớp TS+SQL), "rollback PDF hoạt động"
+  (publish lại revisionId cũ, đã test). Đã làm thêm F08 (chia sẻ FB/LinkedIn/copy/native +
+  Open Graph server-side thật, xác nhận bằng curl HTML) và F09 (embed `/read/:permalink/embed`
+  giữ nguyên gate mật khẩu, đã test tab ẩn danh). Tất cả kiểm thử bằng
+  `tests/integration/p3_e2e.test.js` (33/33 PASS, HTTP thật) + kiểm thử tay qua Claude
+  Browser trên Docker thật, cộng với chạy lại 3 bộ test cũ (13+14+16 PASS, không hồi quy).
+  Giới hạn còn mở: khóa mật khẩu theo TỪNG SÁCH chứ không theo IP (có thể bị lợi dụng khóa
+  link của chính chủ, chấp nhận được ở quy mô pilot, không quảng bá như DRM); cột
+  `book_settings.public_preview` (Creator chủ động lộ tiêu đề/ảnh cho sách có mật khẩu) có
+  sẵn từ schema P1 nhưng chưa dùng; chưa nhúng thử `/embed` vào 1 site thật khác; chưa bấm
+  thử `navigator.share` trên thiết bị thật hỗ trợ (chỉ xác nhận code ẩn/hiện đúng điều kiện).
+  Chi tiết đầy đủ ở MEMORYBANK.md.
+  - Sau đó (17/09/2026): làm lại toàn bộ UI `apps/web` theo yêu cầu người dùng — tiếng Việt có
+    dấu chuẩn UTF-8 (trước đó ASCII không dấu), i18n `next-intl` (Việt/Anh, không đổi URL/
+    permalink), Xoăn Design System (port ~13 component sang React), mobile-native cho cả 6 màn
+    hình (không responsive-shrink). Phát hiện và sửa 1 bug hydration React thật (ảnh hưởng mọi
+    trang, do `XToast.tsx`) + 1 bug UX thật (thông báo copy-link trong reader không bao giờ
+    hiện được). Không đổi BE, chạy lại 76/76 test cũ xác nhận không hồi quy. Chi tiết đầy đủ,
+    kể cả giới hạn còn mở, ở MEMORYBANK.md.
 
 P6 có thể khảo sát từ P0, nhưng không khóa tiến độ đọc sách vào thời gian Meta/LinkedIn xét duyệt. Mốc v1.0-core đạt P5 phải ghi rõ social trực tiếp chưa hoàn tất nếu P6 còn mở; không ghi toàn bộ yêu cầu đã xong.
 
