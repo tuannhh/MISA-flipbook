@@ -101,6 +101,12 @@ export interface PublicBook {
  * thay cho bang Tenants/bang sach xuyen-tenant day so lieu ky thuat truoc day. tenant_id
  * giu lai CHI de FE dieu huong sang trang chi tiet sach (xem BookDetailPage muc
  * "tenantId override"), khong hien thi truc tiep tren bang. */
+export interface AdminTenant {
+  id: string;
+  name: string;
+  status: "active" | "suspended";
+}
+
 export interface AdminBook {
   id: string;
   title: string;

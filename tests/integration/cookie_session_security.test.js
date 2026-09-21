@@ -85,6 +85,21 @@ async function main() {
   });
   check("cookie-authenticated write with matching CSRF header is accepted", allowed.response.status === 201 && Boolean(allowed.data?.id), allowed.data);
 
+  const tenantList = await request("/api/admin/tenants", { headers: { cookie } });
+  check("Admin receives active tenants for create-book selection", tenantList.response.status === 200 && tenantList.data?.some((tenant) => tenant.id === allowed.data?.id && tenant.status === "active"), tenantList.data);
+
+  const createdBook = await request("/api/books", {
+    method: "POST",
+    headers: {
+      cookie,
+      "content-type": "application/json",
+      "x-csrf-token": cookieValue(csrf),
+      "x-tenant-id": allowed.data?.id,
+    },
+    body: JSON.stringify({ title: `Admin creates book ${Date.now()}` }),
+  });
+  check("System Admin can create a book in the selected tenant", createdBook.response.status === 201 && Boolean(createdBook.data?.id), createdBook.data);
+
   const bearerMe = await request("/api/me", { headers: { authorization: `Bearer ${legacyToken}` } });
   check("existing bearer API clients remain compatible", bearerMe.response.status === 200, bearerMe.data);
 

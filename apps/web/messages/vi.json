@@ -29,7 +29,18 @@
     "noticeBookDeleted": "Đã xóa sách.",
     "noticeBooksDeleted": "Đã xóa {count} sách.",
     "errorDelete": "Không xóa được sách.",
-    "noResults": "Không có dữ liệu."
+    "noResults": "Không có dữ liệu.",
+    "createBook": "Tạo flipbook",
+    "createBookDialogTitle": "Tạo flipbook mới",
+    "tenantLabel": "Đơn vị phát hành",
+    "tenantPlaceholder": "Chọn đơn vị",
+    "titleLabel": "Tiêu đề flipbook",
+    "titlePlaceholder": "Nhập tiêu đề flipbook...",
+    "creating": "Đang tạo...",
+    "createBookOwnerNote": "Flipbook mới sẽ thuộc tài khoản Admin hiện tại. Bạn sẽ được chuyển sang bước tải PDF ngay sau khi tạo.",
+    "noActiveTenant": "Cần có ít nhất một đơn vị đang hoạt động để tạo flipbook.",
+    "noticeBookCreated": "Đã tạo flipbook. Hãy tải PDF để tiếp tục.",
+    "errorCreateBook": "Không tạo được flipbook."
   },
   "common": {
     "appName": "MISA Flipbook",

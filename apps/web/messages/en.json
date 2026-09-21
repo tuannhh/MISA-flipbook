@@ -29,7 +29,18 @@
     "noticeBookDeleted": "Book deleted.",
     "noticeBooksDeleted": "{count} books deleted.",
     "errorDelete": "Couldn't delete the book.",
-    "noResults": "No data."
+    "noResults": "No data.",
+    "createBook": "Create flipbook",
+    "createBookDialogTitle": "Create a new flipbook",
+    "tenantLabel": "Publishing tenant",
+    "tenantPlaceholder": "Choose a tenant",
+    "titleLabel": "Flipbook title",
+    "titlePlaceholder": "Enter a flipbook title...",
+    "creating": "Creating...",
+    "createBookOwnerNote": "The new flipbook belongs to the current Admin account. You will go straight to PDF upload after it is created.",
+    "noActiveTenant": "At least one active tenant is needed to create a flipbook.",
+    "noticeBookCreated": "Flipbook created. Upload a PDF to continue.",
+    "errorCreateBook": "Couldn't create the flipbook."
   },
   "common": {
     "appName": "MISA Flipbook",
