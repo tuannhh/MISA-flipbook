@@ -1755,6 +1755,11 @@ khi bật password, và suffix range qua grant password vẫn phát được. P5
 Range download PDF gốc. Reader được kiểm tra trực tiếp trong browser: 1 audio control có source scoped,
 `audio/wav`, `preload=none`, đúng một overlay.
 
+Sau khi thêm assertion `416` cho range không thoả, E2E đạt 16/16. Dependency audit tại thời điểm
+candidate: `npm audit --omit=dev` cho API, web và worker-convert đều 0 advisory; `pip-audit` với
+`services/pdf-worker/requirements.txt` cũng không có advisory đã biết. Đây là snapshot advisory,
+không thay thế quét image/digest ở môi trường deploy MISA.
+
 **Giới hạn còn mở trước stable:** chưa có PDF MISA thật có video hoặc đủ ma trận codec; `/Sound` raw PCM
 và media không nằm ở ba annotation trên chưa hỗ trợ; kiểm tra browser là desktop Docker, không thay device
 matrix cũ/mới/tablet. Không coi F10 hoàn tất hay candidate là stable cho đến khi corpus MISA và policy
