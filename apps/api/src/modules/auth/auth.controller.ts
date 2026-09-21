@@ -22,10 +22,9 @@ export class AuthController {
    * dong thoi khong khoa oan toan bo nguoi dung cung mang NAT/proxy chia se IP khi ho
    * dang nhap dung email cua rieng minh.
    *
-   * Chua co reverse proxy truoc API (xem infra/docker/docker-compose.yml) nen KHONG
-   * bat `trust proxy` - req.ip la dia chi TCP that, client khong tu gia mao duoc qua
-   * X-Forwarded-For. Khi them proxy that o giai doan sau, phai cau hinh trust proxy
-   * dung so hop/IP allowlist cua proxy do truoc khi doc lai header nay.
+   * Docker pilot chi mo API sau mot Nginx proxy va `TRUST_PROXY_HOPS=1`, nen req.ip
+   * la client address sau khi proxy da ghi de X-Forwarded-For. Deploy khac phai dat
+   * dung topology da chot (direct API = 0); khong duoc bat trust proxy tuy y.
    */
   @Post("login")
   async login(@Body() dto: LoginDto, @Req() req: Request): Promise<{ accessToken: string }> {

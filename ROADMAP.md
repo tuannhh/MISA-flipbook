@@ -72,6 +72,13 @@ không cần App/OAuth, đã kiểm chứng URL sinh đúng qua Claude Browser. 
 cao" (OAuth đăng thẳng qua tài khoản đã kết nối) vẫn vướng điểm nghẽn giống Facebook: cần
 người dùng tự tạo LinkedIn Developer App trước — chưa làm. Instagram chưa bắt đầu.
 
+**Cập nhật candidate Docker edge (21/09/2026):** Compose hiện chạy web và API sau Nginx, chỉ proxy
+mở cổng public; browser gọi API cùng origin qua `/api`. Nginx non-root ghi đè header IP do client gửi,
+API tin đúng một hop có cấu hình và regression thật xác nhận không thể giả `X-Forwarded-For` để lách
+login throttle. P1 (14), P2 (21), P3 (35), security audit (14), P5 upload/UAT (21) và proxy security
+(5) đều pass qua public proxy trên stack cô lập. Đây tăng độ sát production của Docker pilot, nhưng
+chưa thay cho TLS/CDN và topology proxy do DevOps MISA chốt.
+
 ## Backlog ưu tiên
 P0: thu thập PDF mẫu → benchmark PDFium/pypdf → annotation/media inventory → thử hiệu ứng + JPEG fallback trên máy yếu → quyết định ADR.
 P1: schema/permission tests trước → API auth → upload private → dispatcher/outbox → worker resource limits.

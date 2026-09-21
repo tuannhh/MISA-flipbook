@@ -81,7 +81,20 @@ Social OAuth dùng state, PKCE khi phù hợp, token mã hóa ở server, có re
 ## 8. Docker pilot → server MISA
 Người dùng đã chốt làm Docker trước; DevOps tự quyết định sizing và hạ tầng server MISA khi triển khai thật. Các thông số dưới đây chỉ dành cho đo thử, không phải yêu cầu mua/cấp server.
 Pilot đề xuất Linux containers, 4 vCPU/8 GB RAM, SSD dung lượng tính theo corpus; thông số để đo thử, không phải sizing production. Compose service: proxy, web, api, dispatcher, pdf-worker, postgres, redis. Local storage nằm trong volume riêng; khi lên server chuyển adapter S3 hoặc volume dùng chung đã đánh giá.
-Chỉ proxy mở cổng public; DB/Redis/worker dùng mạng nội bộ. Có healthcheck, readiness, graceful shutdown, resource limits, restart policy; migration chạy một job trước release. Secret ở secret store/env ngoài Git; .env.example chỉ chứa placeholder.
+Compose pilot chạy Nginx non-root ở cổng `8080`; API và web chỉ ở mạng Compose. Proxy route web tại
+`/`, route API tại `/api`, stream upload không buffer, giới hạn request body 201 MB (API vẫn là lớp
+kiểm tra kích thước/định dạng cuối cùng), không cấu hình cache riêng và để API quyết định
+`Cache-Control` cho asset protected. Proxy ghi đè `X-Forwarded-For` bằng TCP peer rồi API tin đúng
+một hop (`TRUST_PROXY_HOPS=1`), vì vậy client không thể tự đưa IP giả để lách rate limit. Response
+edge có `nosniff`, Permissions-Policy tối thiểu và Referrer-Policy để query reader-grant không đi
+sang hyperlink cross-origin. Không đặt `X-Frame-Options` vì `/embed` là một tính năng công khai.
+
+Đây là topology Docker pilot, không phải cấu hình TLS production. Khi MISA đặt load balancer/TLS
+gateway phía trước, DevOps phải giữ API không public, xác thực proxy upstream và đặt chính xác
+`TRUST_PROXY_HOPS` hoặc allowlist proxy. Không copy giá trị `1` một cách máy móc nếu có thêm hop;
+sai topology có thể khiến rate-limit nhận IP giả. Có healthcheck, readiness, graceful shutdown,
+resource limits, restart policy; migration chạy một job trước release. Secret ở secret store/env
+ngoài Git; `.env.example` chỉ chứa placeholder.
 
 Chuyển lên MISA:
 1. Chốt OS/Linux container support, domain/TLS, reverse proxy, registry, DNS, firewall, SSO và kho file.

@@ -33,8 +33,9 @@ jobs:
           INTERNAL_API_TOKEN=ci_internal_token_${{ github.run_id }}
           PDF_MAX_BYTES=209715200
           PDF_PIPELINE_VERSION=v1
-          CORS_ORIGIN=http://localhost:3001
-          WEB_PUBLIC_API_BASE_URL=http://localhost:3000
+          CORS_ORIGIN=http://localhost:8080
+          TRUST_PROXY_HOPS=1
+          WEB_PUBLIC_API_BASE_URL=/api
           DISPATCHER_POLL_INTERVAL_MS=1000
           DISPATCHER_RECONCILE_INTERVAL_MS=10000
           DISPATCHER_JOB_ATTEMPTS=3
@@ -74,7 +75,7 @@ jobs:
       - name: Run HTTP-level API e2e tests (P1)
         working-directory: tests/integration
         env:
-          API_BASE_URL: http://127.0.0.1:3000
+          API_BASE_URL: http://127.0.0.1:8080/api
           ADMIN_EMAIL: admin@misa.local
           ADMIN_PASSWORD: ChangeThisAdminPw123!
         run: node api_e2e.test.js
@@ -82,7 +83,7 @@ jobs:
       - name: Run publish/preview/public-reader e2e tests (P2)
         working-directory: tests/integration
         env:
-          API_BASE_URL: http://127.0.0.1:3000
+          API_BASE_URL: http://127.0.0.1:8080/api
           ADMIN_EMAIL: admin@misa.local
           ADMIN_PASSWORD: ChangeThisAdminPw123!
           JOB_TIMEOUT_MS: 60000
@@ -94,7 +95,7 @@ jobs:
       - name: Run password protection / download e2e tests (P3)
         working-directory: tests/integration
         env:
-          API_BASE_URL: http://127.0.0.1:3000
+          API_BASE_URL: http://127.0.0.1:8080/api
           SEED_ADMIN_EMAIL: admin@misa.local
           SEED_ADMIN_PASSWORD: ChangeThisAdminPw123!
           JOB_TIMEOUT_MS: 60000
@@ -103,7 +104,7 @@ jobs:
       - name: Run Publish/Private visibility e2e tests (F16)
         working-directory: tests/integration
         env:
-          API_BASE_URL: http://127.0.0.1:3000
+          API_BASE_URL: http://127.0.0.1:8080/api
           DATABASE_URL: postgres://misa_admin:ci_pg_password_${{ github.run_id }}@127.0.0.1:5432/misa_flipbook
           SEED_ADMIN_EMAIL: admin@misa.local
           SEED_ADMIN_PASSWORD: ChangeThisAdminPw123!
@@ -113,7 +114,7 @@ jobs:
       - name: Run UAT gap-fill e2e tests (P5)
         working-directory: tests/integration
         env:
-          API_BASE_URL: http://127.0.0.1:3000
+          API_BASE_URL: http://127.0.0.1:8080/api
           SEED_ADMIN_EMAIL: admin@misa.local
           SEED_ADMIN_PASSWORD: ChangeThisAdminPw123!
           JOB_TIMEOUT_MS: 60000
@@ -124,7 +125,7 @@ jobs:
       - name: Run security audit regression tests (SEC-01/02/03, codex 2026-09-21)
         working-directory: tests/integration
         env:
-          API_BASE_URL: http://127.0.0.1:3000
+          API_BASE_URL: http://127.0.0.1:8080/api
           DATABASE_URL: postgres://misa_admin:ci_pg_password_${{ github.run_id }}@127.0.0.1:5432/misa_flipbook
           SEED_ADMIN_EMAIL: admin@misa.local
           SEED_ADMIN_PASSWORD: ChangeThisAdminPw123!
@@ -160,10 +161,16 @@ jobs:
             -e TEST_DATABASE_URL=postgres://misa_admin:ci_pg_password_${{ github.run_id }}@postgres:5432/misa_flipbook \
             api node /app/tests/integration/pipeline_upload.test.js
 
+      - name: Run reverse-proxy and trust-proxy regression
+        working-directory: tests/integration
+        env:
+          API_BASE_URL: http://127.0.0.1:8080/api
+        run: node proxy_security.test.js
+
       - name: Run rate-limit fallback regression while Redis is unavailable
         working-directory: infra/docker
         env:
-          API_BASE_URL: http://127.0.0.1:3000
+          API_BASE_URL: http://127.0.0.1:8080/api
           SEED_ADMIN_EMAIL: admin@misa.local
           SEED_ADMIN_PASSWORD: ChangeThisAdminPw123!
         run: |

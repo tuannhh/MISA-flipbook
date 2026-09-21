@@ -1707,3 +1707,25 @@ collector không thay object-storage lifecycle/HA. Không gắn tag stable cho t
 nhận candidate và các giới hạn chấp nhận được.
 Hồ sơ candidate hiện hành: `handoffs/HF-20260921-03.md` (runtime source
 `00e3af4ad3147ae913d6f0a79b4565dee0eb599c`).
+
+## Codex — Docker public edge và trust-proxy (21/09/2026)
+
+Đã thay topology pilot cũ (API/web mở port trực tiếp) bằng Nginx non-root làm public edge duy nhất.
+Browser gọi API qua path cùng origin `/api`; API/web chỉ còn ở Compose network. Proxy stream upload,
+giữ `Cache-Control` do API quyết định, giới hạn body 201 MB và có `nosniff`, Permissions-Policy tối
+thiểu, Referrer-Policy `strict-origin-when-cross-origin`. Header này đặc biệt ngăn reader grant ở
+query string bị gửi theo Referer khi người đọc mở hyperlink ngoài domain. Không đặt X-Frame-Options
+vì `/embed` được phép nhúng theo yêu cầu sản phẩm.
+
+Nginx luôn ghi đè `X-Forwarded-For` bằng địa chỉ TCP peer trước khi chuyển API. `main.ts` chỉ bật
+Express `trust proxy` khi `TRUST_PROXY_HOPS` hợp lệ từ 1 đến 2; Docker default là 1, deploy direct là
+0. Regression tạo một login sai với XFF giả rồi thử lại không header; cả hai bị cùng lockout, chứng
+minh client không tự đổi source được. Đây là kiểm chứng cho **một Nginx hop**. Nếu MISA thêm CDN,
+load balancer hoặc TLS gateway, DevOps phải chốt chain, bảo vệ upstream và cấu hình hop/allowlist
+tương ứng; không coi `1` là giá trị production mặc định.
+
+**Kiểm chứng thực tế trên Compose cô lập `misa-flipbook-codex-proxy`:** proxy chỉ public
+`127.0.0.1:13000`; API/web chỉ có port nội bộ. HTTP web và `/health` trả 200. `proxy_security` 5/5,
+P1 14/14, P2 21/21, P3 35/35, security audit 14/14 và P5 21/21 đều gọi `http://127.0.0.1:13000/api`.
+Đây là candidate; vẫn chưa thay device matrix thật, PDF audio/video mẫu, CDN cache purge, TLS topology,
+object storage/HA hay stable acceptance. Hồ sơ handoff kế tiếp: `handoffs/HF-20260921-04.md`.

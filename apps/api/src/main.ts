@@ -10,6 +10,15 @@ function corsOrigins(): string[] | boolean {
   return raw.split(",").map((s) => s.trim());
 }
 
+function trustProxyHops(): number {
+  const raw = process.env.TRUST_PROXY_HOPS ?? "0";
+  const hops = Number(raw);
+  if (!Number.isSafeInteger(hops) || hops < 0 || hops > 2) {
+    throw new Error("TRUST_PROXY_HOPS phai la so nguyen tu 0 den 2.");
+  }
+  return hops;
+}
+
 async function bootstrap() {
   // FE (apps/web) la app rieng, goi qua HTTP thuan tuy (khong SSR-proxy, khong session
   // chia se) - can CORS de trinh duyet cho phep goi tu domain khac. Dung Bearer token
@@ -21,6 +30,14 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
     cors: { origin: corsOrigins(), exposedHeaders: ["Content-Disposition"] },
   });
+  // Docker pilot exposes API only through the bundled proxy. Trust exactly its
+  // one hop so req.ip is the client address for abuse controls, while a direct
+  // API deployment keeps the safe default 0 and ignores X-Forwarded-For.
+  const proxyHops = trustProxyHops();
+  if (proxyHops > 0) {
+    const expressApp = app.getHttpAdapter().getInstance() as { set(name: string, value: number): void };
+    expressApp.set("trust proxy", proxyHops);
+  }
   app.useGlobalPipes(
     new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true })
   );

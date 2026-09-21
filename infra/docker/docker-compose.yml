@@ -1,13 +1,8 @@
 name: misa-flipbook
 
-# P1: postgres, redis, migrate (one-shot), api, dispatcher, pdf-worker.
-# CHUA co: proxy (nginx) va apps/web (Next.js) - chua co UI/reader de phuc vu, se
-# them o P2/P3 khi co gi do that su can proxy. Ghi ro trong MEMORYBANK.md, khong
-# tu nhan da xong toan bo "Docker Compose pilot" cua ARCHITECTURE.md muc 8.
-#
-# Chi postgres/redis mo port ra 127.0.0.1 de dev/test cuc bo; api mo port de goi
-# thu (chua co proxy). dispatcher/pdf-worker KHONG mo port ra host - chi goi duoc
-# tu trong mang cua compose (ARCHITECTURE.md: "DB/Redis/worker dung mang noi bo").
+# Pilot serves web and API through one Nginx reverse proxy. API/web have no host
+# ports, so request IP forwarding has one known, testable hop. Postgres/Redis stay
+# bound to loopback only for local diagnostics; workers are internal-only.
 
 services:
   postgres:
@@ -78,6 +73,7 @@ services:
       BOOK_PASSWORD_MAX_ATTEMPTS: ${BOOK_PASSWORD_MAX_ATTEMPTS:-8}
       BOOK_PASSWORD_IP_MAX_ATTEMPTS: ${BOOK_PASSWORD_IP_MAX_ATTEMPTS:-32}
       BOOK_PASSWORD_LOCKOUT_MINUTES: ${BOOK_PASSWORD_LOCKOUT_MINUTES:-15}
+      TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-1}
       JWT_SECRET: ${JWT_SECRET:?can dat JWT_SECRET trong .env}
       JWT_EXPIRES_IN_SECONDS: ${JWT_EXPIRES_IN_SECONDS:-28800}
       STORAGE_ROOT: /data/storage
@@ -92,12 +88,10 @@ services:
       TENANT_STORAGE_BYTES: ${TENANT_STORAGE_BYTES:-53687091200}
       TENANT_PENDING_JOBS: ${TENANT_PENDING_JOBS:-20}
       PDF_PIPELINE_VERSION: ${PDF_PIPELINE_VERSION:-v1}
-      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3001}
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:8080}
       PORT: "3000"
     volumes:
       - storage_data:/data/storage
-    ports:
-      - "127.0.0.1:3000:3000"
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 10s
@@ -109,16 +103,13 @@ services:
           cpus: "1"
           memory: 512M
 
-  # web (FE): app Next.js RIENG, chi goi api qua HTTP/JSON (Bearer JWT, CORS) -
-  # khong SSR-proxy, khong dung chung process/DB voi BE ("tach rieng FE va BE").
-  # NEXT_PUBLIC_API_BASE_URL phai la URL trinh duyet cua NGUOI DUNG goi toi duoc
-  # (vd http://localhost:3000 khi test tren may dev) - KHONG dung hostname noi bo
-  # cua Docker network (vd http://api:3000), vi trinh duyet chay ngoai mang do.
+  # web (FE) stays a separate process. Browser calls /api through proxy; server
+  # metadata uses API_INTERNAL_BASE_URL and never resolves the browser-relative path.
   web:
     build:
       context: ../../apps/web
       args:
-        NEXT_PUBLIC_API_BASE_URL: ${WEB_PUBLIC_API_BASE_URL:-http://localhost:3000}
+        NEXT_PUBLIC_API_BASE_URL: ${WEB_PUBLIC_API_BASE_URL:-/api}
         NEXT_PUBLIC_FACEBOOK_APP_ID: ${WEB_PUBLIC_FACEBOOK_APP_ID:-}
     environment:
       # F08: generateMetadata (Open Graph, server-side) chay code TRONG container web,
@@ -130,13 +121,36 @@ services:
     depends_on:
       api:
         condition: service_healthy
-    ports:
-      - "127.0.0.1:3001:3001"
     deploy:
       resources:
         limits:
           cpus: "0.5"
           memory: 256M
+
+  proxy:
+    build:
+      context: ./proxy
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+      web:
+        condition: service_started
+    ports:
+      - "127.0.0.1:8080:8080"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      # BusyBox resolves localhost to IPv6 first while this minimal config listens on IPv4.
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128M
 
   pdf-worker:
     build:

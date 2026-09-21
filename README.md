@@ -1,5 +1,6 @@
-# MISA Flipbook — bộ kế hoạch v0.1
-Ngày: 16/09/2026. Trạng thái: đề xuất để duyệt; chưa triển khai ứng dụng.
+# MISA Flipbook
+Ngày khởi tạo kế hoạch: 16/09/2026. Trạng thái hiện tại: Docker pilot đã có mã chạy được;
+candidate gần nhất chưa phải bản stable.
 
 Mục tiêu: tự vận hành dịch vụ PDF → flipbook online, chạy Docker trước và chuyển lên server MISA; có multi-tenant ngay từ nền tảng.
 
@@ -22,7 +23,23 @@ Mục tiêu: tự vận hành dịch vụ PDF → flipbook online, chạy Docker
 - Tự động đăng mạng xã hội là giai đoạn có điều kiện về API; không coi việc đã đăng nhập mạng xã hội là đã cấp quyền cho MISA Flipbook.
 - Không tạo nhãn “stable” trước khi có phiên bản chạy được, bằng chứng kiểm thử và người dùng xác nhận.
 
-## Hiện đã có / chưa có
-Đã có: đặc tả, kiến trúc đề xuất, roadmap, memory bank và quy trình handoff.
-Chưa có: mã ứng dụng, Git tag, Docker image, triển khai Docker, kiểm thử thực thi, bản backup hoặc điểm rollback thực tế.
-Bộ tài liệu này là mốc tài liệu PLANNING-001, không phải bản phần mềm ổn định.
+## Chạy Docker pilot
+
+1. Sao chép `infra/docker/.env.example` thành `infra/docker/.env` và thay toàn bộ secret placeholder.
+2. Tại `infra/docker`, chạy `docker compose up -d --build --wait`.
+3. Mở `http://localhost:8080`; API công khai nằm dưới cùng origin tại `/api` và healthcheck là `/health`.
+
+Chỉ Nginx proxy mở cổng public. API, web, worker, PostgreSQL và Redis không được publish trực tiếp;
+PostgreSQL/Redis chỉ bind loopback để chẩn đoán trên máy Docker. Mặc định proxy vận hành một hop với
+`TRUST_PROXY_HOPS=1`; nếu topology MISA khác, DevOps phải đặt đúng hop/allowlist trước khi đưa vào môi trường thật.
+
+## Hiện đã có / giới hạn trước stable
+
+Đã có: ứng dụng multi-tenant, Docker Compose, pipeline PDF, reader, publish/rollback, mật khẩu,
+download, share/embed, analytics, storage accounting, CI và candidate handoff. Các kiểm chứng Docker
+cô lập gần nhất được ghi tại `handoffs/HF-20260921-04.md` sau khi commit tương ứng được tạo.
+
+Chưa có stable tag hay điểm rollback production: người dùng cần xác nhận candidate cụ thể theo
+`HANDOFF.md`; sau đó mới tạo annotated tag, ghi image digest và backup/restore reference. Audio/video
+từ PDF vẫn chờ PDF mẫu thật cùng policy; device matrix, CDN/object-storage/HA và topology TLS của MISA
+cũng cần được xác minh trước production.
