@@ -7,6 +7,7 @@ import {
   Injectable,
   NestInterceptor,
   UnauthorizedException,
+  NotFoundException,
 } from "@nestjs/common";
 import { Reflector } from "@nestjs/core";
 import { Observable, from } from "rxjs";
@@ -14,6 +15,8 @@ import { Pool } from "pg";
 import { DB_POOL } from "../db/db.tokens";
 import { REQUIRE_TENANT_KEY } from "./require-tenant.decorator";
 import { AuthedRequest } from "./authed-request";
+import { PDF_UPLOAD, withPdfUpload } from "./pdf-upload";
+import * as fs from "fs/promises";
 
 /**
  * Gan context tenant/user vao MOT transaction Postgres cho toan bo request, dung
@@ -33,7 +36,21 @@ export class DbContextInterceptor implements NestInterceptor {
   ) {}
 
   intercept(context: ExecutionContext, next: CallHandler): Observable<unknown> {
+    if (this.reflector.get<boolean>(PDF_UPLOAD, context.getHandler())) {
+      return from(this.runUpload(context, next));
+    }
     return from(this.run(context, next));
+  }
+
+  private async runUpload(context: ExecutionContext, next: CallHandler) {
+    const req = context.switchToHttp().getRequest<AuthedRequest>();
+    // Short authenticated RLS preflight. No DB connection/transaction is held
+    // during multipart reception; repeat all permission checks after upload.
+    await this.run(context, { handle: () => from((async () => {
+      const result = await req.dbClient.query("SELECT id FROM books WHERE id=$1 AND deleted_at IS NULL", [req.params.id]);
+      if (!result.rowCount) throw new NotFoundException("Khong tim thay sach.");
+    })()) });
+    return withPdfUpload(req, context.switchToHttp().getResponse(), () => this.run(context, next));
   }
 
   private async run(context: ExecutionContext, next: CallHandler): Promise<unknown> {
@@ -44,8 +61,10 @@ export class DbContextInterceptor implements NestInterceptor {
     }
 
     const client = await this.pool.connect();
-    await client.query("BEGIN");
+    let committing = false;
+    req.rollbackFiles = [];
     try {
+      await client.query("BEGIN");
       await client.query("SELECT set_config('app.user_id', $1, true)", [jwtUserId]);
 
       const { rows } = await client.query(
@@ -103,10 +122,14 @@ export class DbContextInterceptor implements NestInterceptor {
       req.tenantId = tenantId;
 
       const result = await lastValue(next.handle());
+      committing = true;
       await client.query("COMMIT");
       return result;
     } catch (err) {
       await client.query("ROLLBACK").catch(() => undefined);
+      // On uncertain COMMIT outcome keep files for reconciliation; never delete
+      // data that may already have become a committed source revision.
+      if (!committing) for (const file of req.rollbackFiles) await fs.unlink(file).catch(() => undefined);
       throw err;
     } finally {
       client.release();

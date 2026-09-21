@@ -12,6 +12,8 @@ PdfReader.get_destination_page_number.
 from __future__ import annotations
 
 import pathlib
+import os
+import math
 import time
 from dataclasses import dataclass, field
 
@@ -24,6 +26,10 @@ from PIL import Image
 READING_WIDTH_PX = 1600
 THUMB_WIDTH_PX = 320
 PDF_SIGNATURE = b"%PDF-"
+MAX_PAGES = int(os.getenv("PDF_MAX_PAGES", "500"))
+MAX_PAGE_PIXELS = int(os.getenv("PDF_MAX_PAGE_PIXELS", "8000000"))
+MAX_OUTPUT_BYTES = int(os.getenv("PDF_MAX_OUTPUT_BYTES", "536870912"))
+MAX_SOURCE_BYTES = int(os.getenv("PDF_MAX_BYTES", "209715200"))
 
 
 class ConversionError(Exception):
@@ -85,6 +91,8 @@ def _extract_links(pdf_path: pathlib.Path, password: str | None):
             raise ConversionError("needs_password", "Mat khau khong dung.")
 
     per_page = []
+    if len(reader.pages) > MAX_PAGES:
+        raise ConversionError("page_limit", f"PDF vuot gioi han {MAX_PAGES} trang.")
     for page in reader.pages:
         rotation = int(page.get("/Rotate", 0)) % 360
         mediabox = page.mediabox
@@ -133,12 +141,18 @@ def convert_pdf(
     if not source_path.exists():
         raise ConversionError("corrupted_or_invalid", f"Khong tim thay file: {source_path}")
 
-    header = source_path.open("rb").read(5)
+    if source_path.stat().st_size > MAX_SOURCE_BYTES:
+        raise ConversionError("size_limit", "PDF vuot gioi han dung luong.")
+    with source_path.open("rb") as source:
+        header = source.read(5)
     if header != PDF_SIGNATURE:
         raise ConversionError("invalid_signature", "File khong co chu ky %PDF-.")
 
     warnings: list[str] = []
-    link_info = _extract_links(source_path, password)
+    try:
+        link_info = _extract_links(source_path, password)
+    except (PdfReadError, FileNotDecryptedError, ValueError) as exc:
+        raise ConversionError("corrupted_or_invalid", "PDF hong hoac khong doc duoc.") from exc
 
     output_dir.mkdir(parents=True, exist_ok=True)
     pages_dir = output_dir / "pages"
@@ -154,9 +168,18 @@ def convert_pdf(
     pages_manifest: list[dict] = []
     t_start = time.perf_counter()
     n_pages = len(pdf)
+    if n_pages < 1 or n_pages > MAX_PAGES:
+        pdf.close()
+        raise ConversionError("page_limit", f"PDF can tu 1 den {MAX_PAGES} trang.")
+    output_bytes = 0
     for i in range(n_pages):
         page = pdf[i]
         w_pt, h_pt = page.get_size()
+        if not all(math.isfinite(v) and v > 0 for v in (w_pt, h_pt)):
+            raise ConversionError("page_geometry", "Kich thuoc trang khong hop le.")
+        pixel_h = math.ceil(READING_WIDTH_PX * h_pt / w_pt)
+        if max(w_pt / h_pt, h_pt / w_pt) > 12 or pixel_h > 8192 or READING_WIDTH_PX * pixel_h > MAX_PAGE_PIXELS:
+            raise ConversionError("pixel_limit", "Trang PDF vuot gioi han kich thuoc render.")
         images = {}
         for label, target_w, fmt in (
             ("thumb", THUMB_WIDTH_PX, "JPEG"),
@@ -167,6 +190,11 @@ def convert_pdf(
             pil_image = bitmap.to_pil().convert("RGB")
             filename = f"page-{i + 1:03d}-{label}.{fmt.lower()}"
             pil_image.save(pages_dir / filename, fmt, quality=82)
+            output_bytes += (pages_dir / filename).stat().st_size
+            pil_image.close()
+            bitmap.close()
+            if output_bytes > MAX_OUTPUT_BYTES:
+                raise ConversionError("output_limit", "PDF sinh ra qua nhieu du lieu anh.")
             images[label] = f"pages/{filename}"
         page.close()
 

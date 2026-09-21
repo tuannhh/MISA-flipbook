@@ -131,6 +131,29 @@ jobs:
           JOB_TIMEOUT_MS: 60000
         run: node sec_audit_20260921.test.js
 
+      - name: Run isolated PDF supervisor regression
+        working-directory: infra/docker
+        run: |
+          docker compose cp ../../services/pdf-worker/tests pdf-worker:/app/tests
+          docker compose exec -T pdf-worker python -m unittest discover -s tests -v
+
+      - name: Run job lease, replay and recovery regression
+        working-directory: infra/docker
+        run: |
+          docker compose cp ../../tests/integration/pipeline_jobs.test.js worker-convert:/app/pipeline_jobs.test.js
+          docker compose cp ../../apps/dispatcher/src worker-convert:/app/dispatcher
+          docker compose stop dispatcher
+          trap 'docker compose start dispatcher' EXIT
+          docker compose exec -T worker-convert node /app/pipeline_jobs.test.js
+
+      - name: Run upload concurrency, quota and disconnect regression
+        working-directory: infra/docker
+        run: |
+          docker compose cp ../../tests api:/app/tests
+          docker compose exec -T -e NODE_PATH=/app/node_modules \
+            -e TEST_DATABASE_URL=postgres://misa_admin:ci_pg_password_${{ github.run_id }}@postgres:5432/misa_flipbook \
+            api node /app/tests/integration/pipeline_upload.test.js
+
       - name: Dump logs on failure
         if: failure()
         working-directory: infra/docker

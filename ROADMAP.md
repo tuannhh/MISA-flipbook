@@ -262,3 +262,9 @@ Không khóa phiên bản stable khi còn lỗi mất dữ liệu, vượt quy�
 - H4 / integrations: social trực tiếp đã kiểm chứng.
 
 Tên/tag thực chỉ tạo sau khi người dùng nói “ổn rồi” cho phiên bản cụ thể và xác minh chất lượng tương ứng.
+
+## Tiếp quản Codex — 21/09/2026
+- Đợt 1: SEC-02 verified; SEC-01/03/UI-01 verified một phần, còn điều kiện security trong docs/audits/20260921-codex-followup.md.
+- Đợt 2 core: PDF process isolation, deadline/budgets, stream upload, tenant source quota, job lease/fencing/retry và EDGE-01 đã có code + Docker regression.
+- Đợt 2 còn mở: tổng storage accounting/retention/orphan collector, soak kill/restart diện rộng.
+- Chưa chốt stable; tiếp theo là reader/security residual, tính đúng đắn nội dung và vận hành theo báo cáo tiếp quản.

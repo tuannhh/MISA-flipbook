@@ -38,6 +38,12 @@ export class LocalStorageAdapter implements StorageAdapter {
     return fs.promises.readFile(this.resolveSafe(objectKey));
   }
 
+  async adoptFile(objectKey: string, sourcePath: string): Promise<void> {
+    const full = this.resolveSafe(objectKey);
+    await fs.promises.mkdir(path.dirname(full), { recursive: true });
+    await fs.promises.rename(sourcePath, full);
+  }
+
   createReadStream(objectKey: string): fs.ReadStream {
     return fs.createReadStream(this.resolveSafe(objectKey));
   }

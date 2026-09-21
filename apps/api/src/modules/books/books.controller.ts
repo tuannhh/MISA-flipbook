@@ -19,6 +19,8 @@ import {
   UploadedFile,
   UseGuards,
   UseInterceptors,
+  SetMetadata,
+  ConflictException,
 } from "@nestjs/common";
 import { FileInterceptor } from "@nestjs/platform-express";
 import type { Response } from "express";
@@ -34,8 +36,8 @@ import { UpdateBookSettingsDto } from "./dto/update-book-settings.dto";
 import { randomSuffix8, slugifyVietnamese } from "./util/slugify";
 import { buildReaderPages } from "./util/build-reader-pages";
 import { RateLimitService } from "../../common/rate-limit/rate-limit.service";
+import { PDF_UPLOAD } from "../../common/tenant/pdf-upload";
 
-const PDF_SIGNATURE = Buffer.from("%PDF-");
 const PDF_MAX_BYTES = Number(process.env.PDF_MAX_BYTES ?? 200 * 1024 * 1024);
 const PIPELINE_VERSION = process.env.PDF_PIPELINE_VERSION ?? "v1";
 const MAX_SLUG_RETRIES = 5;
@@ -99,32 +101,20 @@ export class BooksController {
   @Post()
   async create(@Req() req: AuthedRequest, @Body() dto: CreateBookDto) {
     const baseSlug = slugifyVietnamese(dto.title);
-    let lastError: unknown;
     for (let attempt = 0; attempt < MAX_SLUG_RETRIES; attempt++) {
       const suffix = randomSuffix8();
-      try {
-        const { rows } = await req.dbClient.query(
-          `INSERT INTO books (tenant_id, owner_id, title, permalink_slug, permalink_suffix)
+      const { rows } = await req.dbClient.query(
+        `INSERT INTO books (tenant_id, owner_id, title, permalink_slug, permalink_suffix)
            VALUES ($1,$2,$3,$4,$5)
+           ON CONFLICT (permalink_slug, permalink_suffix) DO NOTHING
            RETURNING id, title, permalink_slug, permalink_suffix, status, created_at`,
-          [req.tenantId, req.userId, dto.title, baseSlug, suffix]
-        );
-        return rows[0];
-      } catch (err: unknown) {
-        const pgErr = err as { code?: string };
-        if (pgErr.code === "23505") {
-          // Trung (slug, suffix) - F02 yeu cau retry khi trung, khong loi ra nguoi dung.
-          lastError = err;
-          continue;
-        }
-        throw err;
-      }
+        [req.tenantId, req.userId, dto.title, baseSlug, suffix]
+      );
+      if (rows.length) return rows[0];
     }
     throw new BadRequestException(
       `Khong tao duoc permalink duy nhat sau ${MAX_SLUG_RETRIES} lan thu.`
     );
-    // eslint-disable-next-line no-unreachable
-    void lastError;
   }
 
   @Get(":id")
@@ -142,7 +132,7 @@ export class BooksController {
   }
 
   @Post(":id/upload")
-  @UseInterceptors(FileInterceptor("file", { limits: { fileSize: PDF_MAX_BYTES } }))
+  @SetMetadata(PDF_UPLOAD, true)
   async upload(
     @Req() req: AuthedRequest,
     @Param("id") bookId: string,
@@ -151,14 +141,13 @@ export class BooksController {
     if (!file) {
       throw new BadRequestException("Thieu file PDF (field 'file').");
     }
-    if (file.buffer.subarray(0, 5).compare(PDF_SIGNATURE) !== 0) {
-      throw new BadRequestException("File khong dung dinh dang PDF (sai chu ky %PDF-).");
-    }
     if (file.size > PDF_MAX_BYTES) {
       throw new BadRequestException(`File vuot qua gioi han ${PDF_MAX_BYTES} bytes.`);
     }
 
-    const bookRes = await req.dbClient.query("SELECT id FROM books WHERE id = $1", [bookId]);
+    // Serialize quota admission per tenant and revision numbering per book.
+    await req.dbClient.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [req.tenantId]);
+    const bookRes = await req.dbClient.query("SELECT id FROM books WHERE id = $1 AND deleted_at IS NULL FOR UPDATE", [bookId]);
     if (bookRes.rowCount === 0) {
       // RLS da loc: hoac khong ton tai, hoac khong phai sach cua nguoi goi -> 404 chung,
       // khong tiet lo su khac biet (tranh do tim ID sach nguoi khac).
@@ -171,10 +160,19 @@ export class BooksController {
     );
     const revisionNumber = revNumRes.rows[0].next as number;
     const revisionId = crypto.randomUUID();
-    const checksum = crypto.createHash("sha256").update(file.buffer).digest("hex");
+    const checksum = req.pdfChecksum!;
     const objectKey = `${req.tenantId}/${bookId}/${revisionId}/source.pdf`;
 
-    await this.storage.saveBuffer(objectKey, file.buffer);
+    const budget = await req.dbClient.query("SELECT * FROM upload_tenant_budget($1)", [req.tenantId]);
+    const usage = budget.rows[0];
+    const maxSource = Number(usage.quotas?.source_bytes ?? process.env.TENANT_SOURCE_BYTES ?? 10737418240);
+    const maxJobs = Number(usage.quotas?.pending_jobs ?? process.env.TENANT_PENDING_JOBS ?? 20);
+    if (Number(usage.source_bytes) + file.size > maxSource || Number(usage.pending_jobs) >= maxJobs) {
+      throw new ConflictException("Tenant da vuot han muc dung luong PDF hoac so job dang cho.");
+    }
+
+    await this.storage.adoptFile(objectKey, file.path);
+    req.rollbackFiles?.push(this.storage.getAbsolutePath(objectKey));
 
     await req.dbClient.query(
       `INSERT INTO revisions (id, tenant_id, book_id, revision_number, source_key, checksum, pipeline_version, state)

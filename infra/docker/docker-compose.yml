@@ -72,6 +72,10 @@ services:
       JWT_EXPIRES_IN_SECONDS: ${JWT_EXPIRES_IN_SECONDS:-28800}
       STORAGE_ROOT: /data/storage
       PDF_MAX_BYTES: ${PDF_MAX_BYTES:-209715200}
+      PDF_UPLOAD_CONCURRENCY: ${PDF_UPLOAD_CONCURRENCY:-4}
+      PDF_UPLOAD_TIMEOUT_MS: ${PDF_UPLOAD_TIMEOUT_MS:-120000}
+      TENANT_SOURCE_BYTES: ${TENANT_SOURCE_BYTES:-10737418240}
+      TENANT_PENDING_JOBS: ${TENANT_PENDING_JOBS:-20}
       PDF_PIPELINE_VERSION: ${PDF_PIPELINE_VERSION:-v1}
       CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3001}
       PORT: "3000"
@@ -126,6 +130,16 @@ services:
     environment:
       STORAGE_ROOT: /data/storage
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?can dat INTERNAL_API_TOKEN trong .env}
+      PDF_MAX_BYTES: ${PDF_MAX_BYTES:-209715200}
+      PDF_MAX_PAGES: ${PDF_MAX_PAGES:-500}
+      PDF_MAX_PAGE_PIXELS: ${PDF_MAX_PAGE_PIXELS:-8000000}
+      PDF_MAX_OUTPUT_BYTES: ${PDF_MAX_OUTPUT_BYTES:-536870912}
+      PDF_PROCESS_MEMORY_MB: ${PDF_PROCESS_MEMORY_MB:-512}
+      PDF_MAX_PROCESSES: ${PDF_MAX_PROCESSES:-1}
+      PDF_TIMEOUT_SECONDS: ${PDF_TIMEOUT_SECONDS:-600}
+    init: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
     volumes:
       - storage_data:/data/storage
     # KHONG publish port ra host - chi dispatcher (cung mang compose) goi duoc.
@@ -139,6 +153,7 @@ services:
         limits:
           cpus: "1"
           memory: 1G
+          pids: 64
 
   # dispatcher: CHI claim job tu Postgres outbox roi day vao BullMQ/Redis - khong
   # goi pdf-worker, khong xu ly. Neu code xu ly (worker-convert) co bug/crash, claim
@@ -190,6 +205,9 @@ services:
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN}
       STORAGE_ROOT: /data/storage
       CONCURRENCY: ${WORKER_CONVERT_CONCURRENCY:-2}
+      JOB_ATTEMPTS: ${DISPATCHER_JOB_ATTEMPTS:-3}
+      JOB_LEASE_SECONDS: ${JOB_LEASE_SECONDS:-60}
+      PDF_TIMEOUT_SECONDS: ${PDF_TIMEOUT_SECONDS:-600}
     volumes:
       - storage_data:/data/storage
     deploy:

@@ -1626,3 +1626,11 @@ Sau mỗi đợt công việc, ghi: đã đổi gì, quyết định/giả đị
 Giữ lịch sử ADR nếu thay quyết định, đánh dấu superseded thay vì xóa.
 Khi người dùng nói “ổn rồi”, làm quy trình HANDOFF.md cho đúng build hiện tại; nếu chỉ duyệt kế hoạch thì ghi duyệt tài liệu, không tạo stable ứng dụng giả.
 Đọc README, MEMORYBANK và hồ sơ handoff gần nhất trước khi tiếp tục phát triển.
+
+## Codex tiếp quản pipeline sau phản hồi Claude (21/09/2026)
+
+Baseline 745e28c. Đã đọc CLAUDE-RESPONSE-20260921 và kiểm chứng lại. SEC-02 chấp nhận theo quyết định suspend chỉ chặn quản trị; SEC-01/03 và UI-01 còn điều kiện an toàn cần hoàn thiện (cache transition, Redis fallback, JWT đăng nhập trong URL). Không phủ nhận các lỗi Claude đã sửa đúng.
+
+Đã triển khai PDF supervisor dùng subprocess riêng + kill/reap deadline; disk-stream upload với DB preflight ngắn, kiểm quyền lại sau body; giới hạn file/trang/pixel/output/RAM/CPU; quota nguồn và pending jobs theo tenant; job generation/lease/heartbeat/fenced completion, DB retries và unique assets; ON CONFLICT slug và serialize revision number. Migrations 0015/0016. Chi tiết thiết kế, kiểm chứng và giới hạn ở [báo cáo tiếp quản](docs/audits/20260921-codex-followup.md).
+
+Kiểm chứng trên stack Docker RIÊNG misa-flipbook-codex-test: 123 assertion regression cũ + 12 job + 6 upload; 7 test case Python supervisor. Stack người dùng đang dùng chưa thay đổi. Không gắn stable tag. Giao thức job mới yêu cầu triển khai dispatcher/worker đồng bộ, không rolling mix với worker cũ. Chưa đóng toàn bộ PDF-02: accounting dung lượng ảnh/attempt mồ côi và retention collector còn mở. PERF/reader và đợt vận hành chưa thực hiện trong thay đổi này.
