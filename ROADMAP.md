@@ -300,3 +300,13 @@ chặn password spraying, và HMAC email/IP trước khi ghi key. Các kết qu�
 đủ để stable được lưu trong handoff candidate kế tiếp; vẫn cần device matrix thật, kiểm chứng
 proxy/CDN theo topology DevOps, PDF audio/video mẫu và object storage/HA trước production MISA.
 Hồ sơ candidate hiện hành: `handoffs/HF-20260921-03.md`; chưa gắn stable tag.
+
+## Candidate Codex 21/09/2026 — Dashboard HttpOnly session / CSRF
+
+Commit `882edd457d6bc76f523fcd617f4b829802929006` hoàn tất residual Dashboard JWT browser: cookie
+HttpOnly cùng origin, CSRF cho thao tác ghi, CORS origin explicit và logout không cache; Bearer API
+vẫn tương thích. Docker edge cô lập đạt 125 assertion qua các nhóm cookie (13), P1 (14), P2 (21),
+P3 (35), F16 (12), security (14), media (16), cùng production builds. Đây là candidate để DevOps
+MISA dựng Docker pilot/staging; không phải stable. Yêu cầu trước production: TLS với
+`AUTH_COOKIE_SECURE=true`, topology proxy đúng, secret manager, backup restore drill, device matrix
+và corpus PDF MISA. Xem `handoffs/HF-20260921-06.md`.

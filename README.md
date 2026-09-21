@@ -37,7 +37,7 @@ PostgreSQL/Redis chỉ bind loopback để chẩn đoán trên máy Docker. Mặ
 
 Đã có: ứng dụng multi-tenant, Docker Compose, pipeline PDF, reader, publish/rollback, mật khẩu,
 download, share/embed, analytics, storage accounting, CI, cùng baseline media PDF nhúng an toàn.
-Các kiểm chứng Docker cô lập gần nhất được ghi tại `handoffs/HF-20260921-05.md`; đây là candidate
+Các kiểm chứng Docker cô lập gần nhất được ghi tại `handoffs/HF-20260921-06.md`; đây là candidate
 hiện hành, không phải stable hay mốc rollback production.
 
 Chưa có stable tag hay điểm rollback production: người dùng cần xác nhận candidate cụ thể theo

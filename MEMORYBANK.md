@@ -1765,3 +1765,18 @@ và media không nằm ở ba annotation trên chưa hỗ trợ; kiểm tra brow
 matrix cũ/mới/tablet. Không coi F10 hoàn tất hay candidate là stable cho đến khi corpus MISA và policy
 media được nghiệm thu. Hồ sơ candidate: `handoffs/HF-20260921-05.md`, runtime source
 `4b82244de928eea1d4abe3a922963f08b559eb6a`.
+
+## Codex — candidate Docker session an toàn (21/09/2026)
+
+Candidate `882edd457d6bc76f523fcd617f4b829802929006` thay JWT Dashboard trong
+`localStorage` bằng cookie `HttpOnly` cùng origin; frontend chỉ còn state UI không bí mật trong
+`sessionStorage`. Mọi POST/PUT/PATCH/DELETE dùng cookie phải gửi double-submit CSRF token, trong
+khi Bearer cho CLI/tích hợp vẫn tương thích. Login/logout `private, no-store`; API từ chối
+`CORS_ORIGIN=*` và Docker có biến `AUTH_COOKIE_SECURE` (HTTPS MISA bắt buộc `true`).
+
+Compose cô lập `misa-flipbook-cookie`, edge `127.0.0.1:13000`, fresh DB migration 0001–0021:
+cookie/CSRF/CORS 13/13; P1 14/14; P2 21/21; P3 35/35; F16 12/12; SEC 14/14; media 16/16;
+API + Next production build pass. CI chạy thêm regression cookie. Handoff hiện hành:
+`handoffs/HF-20260921-06.md`. Đây chỉ sẵn sàng bàn giao Docker pilot/staging; TLS/proxy topology,
+backup restore, device matrix và corpus MISA còn là production gates. Không gắn stable tag trước
+khi người dùng xác nhận candidate đã deploy.
