@@ -12,12 +12,15 @@ def main():
     resource.setrlimit(resource.RLIMIT_AS, (memory, memory))
     resource.setrlimit(resource.RLIMIT_CPU, (cpu, cpu))
     resource.setrlimit(resource.RLIMIT_FSIZE, (256 * 1024 * 1024, 256 * 1024 * 1024))
-    from .convert import ConversionError, convert_pdf
+    from .convert import ConversionError, convert_pdf, convert_share_thumbnail
     req = json.load(sys.stdin)
     try:
-        result = {"status": "ok", "manifest": convert_pdf(
-            pathlib.Path(req["source"]), pathlib.Path(req["output"]),
-            req["pipeline_version"], req.get("password"))}
+        if req.get("operation") == "share_thumbnail":
+            result = {"status": "ok", "bytes": convert_share_thumbnail(pathlib.Path(req["source"]), pathlib.Path(req["output"]))}
+        else:
+            result = {"status": "ok", "manifest": convert_pdf(
+                pathlib.Path(req["source"]), pathlib.Path(req["output"]),
+                req["pipeline_version"], req.get("password"))}
     except ConversionError as exc:
         result = {"status": "error", "reason": exc.reason, "message": exc.message}
     except MemoryError:

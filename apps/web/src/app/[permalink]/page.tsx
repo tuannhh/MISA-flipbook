@@ -17,8 +17,7 @@ export async function generateMetadata({ params }: RouteProps): Promise<Metadata
   return publicReaderMetadata(permalink);
 }
 
-/** Compatibility alias for public links issued before canonical public paths. */
-export default async function LegacyPublicReaderPage({ params, searchParams }: RouteProps) {
+export default async function PublicReaderPage({ params, searchParams }: RouteProps) {
   const { permalink } = await params;
   return <PublicReaderRoute permalink={permalink} initialPage={parsePage((await searchParams).page)} />;
 }

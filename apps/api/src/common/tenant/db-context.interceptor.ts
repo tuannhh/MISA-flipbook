@@ -5,6 +5,7 @@ import {
   ForbiddenException,
   Inject,
   Injectable,
+  Logger,
   NestInterceptor,
   UnauthorizedException,
   NotFoundException,
@@ -16,6 +17,7 @@ import { DB_POOL } from "../db/db.tokens";
 import { REQUIRE_TENANT_KEY } from "./require-tenant.decorator";
 import { AuthedRequest } from "./authed-request";
 import { PDF_UPLOAD, withPdfUpload } from "./pdf-upload";
+import { IMAGE_UPLOAD, withImageUpload } from "./image-upload";
 import * as fs from "fs/promises";
 
 /**
@@ -39,6 +41,9 @@ export class DbContextInterceptor implements NestInterceptor {
     if (this.reflector.get<boolean>(PDF_UPLOAD, context.getHandler())) {
       return from(this.runUpload(context, next));
     }
+    if (this.reflector.get<boolean>(IMAGE_UPLOAD, context.getHandler())) {
+      return from(this.runImageUpload(context, next));
+    }
     return from(this.run(context, next));
   }
 
@@ -53,6 +58,15 @@ export class DbContextInterceptor implements NestInterceptor {
     return withPdfUpload(req, context.switchToHttp().getResponse(), () => this.run(context, next));
   }
 
+  private async runImageUpload(context: ExecutionContext, next: CallHandler) {
+    const req = context.switchToHttp().getRequest<AuthedRequest>();
+    await this.run(context, { handle: () => from((async () => {
+      const result = await req.dbClient.query("SELECT id FROM books WHERE id=$1 AND deleted_at IS NULL", [req.params.id]);
+      if (!result.rowCount) throw new NotFoundException("Khong tim thay sach.");
+    })()) });
+    return withImageUpload(req, context.switchToHttp().getResponse(), () => this.run(context, next));
+  }
+
   private async run(context: ExecutionContext, next: CallHandler): Promise<unknown> {
     const req = context.switchToHttp().getRequest<AuthedRequest>();
     const jwtUserId = req.user?.sub;
@@ -63,6 +77,7 @@ export class DbContextInterceptor implements NestInterceptor {
     const client = await this.pool.connect();
     let committing = false;
     req.rollbackFiles = [];
+    req.afterCommitTasks = [];
     try {
       await client.query("BEGIN");
       await client.query("SELECT set_config('app.user_id', $1, true)", [jwtUserId]);
@@ -124,6 +139,9 @@ export class DbContextInterceptor implements NestInterceptor {
       const result = await lastValue(next.handle());
       committing = true;
       await client.query("COMMIT");
+      for (const task of req.afterCommitTasks) {
+        await task().catch(() => Logger.warn("Khong hoan tat duoc cleanup sau commit; can doi soat storage.", "DbContext"));
+      }
       return result;
     } catch (err) {
       await client.query("ROLLBACK").catch(() => undefined);

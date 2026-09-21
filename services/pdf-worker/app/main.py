@@ -25,6 +25,10 @@ class ConvertRequest(BaseModel):
     pipeline_version: str
     password: str | None = None
 
+class ThumbnailRequest(BaseModel):
+    source_key: str
+    output_key: str
+
 def _resolve_safe(key: str) -> pathlib.Path:
     full = (STORAGE_ROOT / key).resolve()
     if full == STORAGE_ROOT or not full.is_relative_to(STORAGE_ROOT):
@@ -81,5 +85,41 @@ async def convert(req: ConvertRequest, x_internal_token: str | None = Header(def
             return {"status": "error", "reason": "timeout", "message": "PDF xu ly qua thoi gian cho phep."}
         finally:
             # This attempt directory was created exclusively above; child is reaped.
+            if not success:
+                shutil.rmtree(output, ignore_errors=True)
+
+@app.post("/internal/share-thumbnail")
+async def share_thumbnail(req: ThumbnailRequest, x_internal_token: str | None = Header(default=None)):
+    if not hmac.compare_digest(x_internal_token or "", INTERNAL_API_TOKEN):
+        raise HTTPException(401, "Thieu hoac sai internal token.")
+    source = _resolve_safe(req.source_key)
+    output = _resolve_safe(req.output_key)
+    if not source.is_file() or source.is_relative_to(output):
+        raise HTTPException(400, "Source/output khong hop le.")
+    if slots.locked():
+        raise HTTPException(503, "PDF worker dang ban.", headers={"Retry-After": "5"})
+    async with slots:
+        try:
+            output.mkdir(parents=True, exist_ok=False)
+        except FileExistsError:
+            raise HTTPException(409, "Output cua lan xu ly nay da ton tai.")
+        result_path = output / "result.json"
+        success = False
+        try:
+            code = await run_child(
+                {"operation": "share_thumbnail", "source": str(source), "output": str(output / "cover.webp"), "result": str(result_path)},
+                min(TIMEOUT_SECONDS, 60),
+            )
+            if code != 0 or not result_path.exists():
+                return {"status": "error", "reason": "processor_failed", "message": "Anh khong the xu ly trong gioi han tai nguyen."}
+            result = json.loads(result_path.read_text(encoding="utf-8"))
+            success = result.get("status") == "ok" and (output / "cover.webp").is_file()
+            result_path.unlink()
+            if not success:
+                return result
+            return {"status": "ok", "object_key": f"{req.output_key}/cover.webp", "bytes": result["bytes"]}
+        except asyncio.TimeoutError:
+            return {"status": "error", "reason": "timeout", "message": "Xu ly anh qua thoi gian cho phep."}
+        finally:
             if not success:
                 shutil.rmtree(output, ignore_errors=True)

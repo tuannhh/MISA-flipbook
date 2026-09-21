@@ -18,6 +18,7 @@ import { XDialog } from "@/components/xds/XDialog";
 import { XIcon } from "@/components/xds/icons/XIcon";
 import { useToast } from "@/components/xds/XToast";
 import { formatBytes } from "@/lib/format";
+import { publicEmbedCode, publicReaderPath } from "@/lib/public-reader-url";
 
 type BookWithCover = Book & { cover_asset_id: string | null };
 
@@ -29,10 +30,9 @@ const GA4_ID_RE = /^G-[A-Za-z0-9]{4,20}$/;
 
 // F09: iframe responsive, khong co kich thuoc co dinh - xem chu thich goc cua
 // ham nay truoc khi sua (giu nguyen logic tu P3, chi doi UI xung quanh).
-function embedCode(publicPath: string): string {
+function embedCode(permalink: string): string {
   const origin = typeof window !== "undefined" ? window.location.origin : "";
-  const src = `${origin}${publicPath}/embed`;
-  return `<iframe src="${src}" style="width:100%;aspect-ratio:16/9;border:0" allowfullscreen loading="lazy"></iframe>`;
+  return publicEmbedCode(permalink, origin);
 }
 
 export default function BookDetailPage() {
@@ -63,9 +63,11 @@ export default function BookDetailPage() {
   const [gaIdBusy, setGaIdBusy] = useState(false);
   const [publishTarget, setPublishTarget] = useState<string | null>(null);
   const [backgroundBusy, setBackgroundBusy] = useState(false);
+  const [shareThumbnailBusy, setShareThumbnailBusy] = useState(false);
   const [backgroundVersion, setBackgroundVersion] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const backgroundInputRef = useRef<HTMLInputElement>(null);
+  const shareThumbnailInputRef = useRef<HTMLInputElement>(null);
   const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const load = useCallback(async () => {
@@ -328,6 +330,31 @@ export default function BookDetailPage() {
     }
   }
 
+  async function uploadShareThumbnail(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file || !token || !tenantId) return;
+    setShareThumbnailBusy(true);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const updated = await apiFetch<BookSettings>(`/books/${id}/share-thumbnail`, {
+        method: "POST",
+        token,
+        tenantId,
+        body: form,
+        isForm: true,
+      });
+      setSettings(updated);
+      setBook((current) => (current ? { ...current, cover_asset_id: updated.thumbnail_asset_id } : current));
+      toast("success", t("noticeShareThumbnailSet"));
+    } catch (err) {
+      toast("error", err instanceof ApiError ? err.message : t("errorUploadShareThumbnail"));
+    } finally {
+      setShareThumbnailBusy(false);
+      if (shareThumbnailInputRef.current) shareThumbnailInputRef.current.value = "";
+    }
+  }
+
   async function chooseCover(thumbAssetId: string) {
     if (!token || !tenantId) return;
     try {
@@ -343,7 +370,8 @@ export default function BookDetailPage() {
     return <div className="flex min-h-dvh items-center justify-center text-[13px] text-[var(--xds-text-secondary)]">{tc("loading")}</div>;
   }
 
-  const publicUrl = book.status === "published" ? `/read/${book.permalink_slug}-${book.permalink_suffix}` : null;
+  const publicPermalink = `${book.permalink_slug}-${book.permalink_suffix}`;
+  const publicUrl = book.status === "published" ? publicReaderPath(publicPermalink) : null;
   const STATUS_COLOR: Record<Book["status"], XTagColor> = { draft: "neutral", converting: "warning", ready: "info", published: "success", error: "danger" };
 
   const publishDialog = (
@@ -475,6 +503,28 @@ export default function BookDetailPage() {
       </div>
 
       <div className="mt-5 border-t border-[var(--xds-border-light)] pt-4">
+        <label className="mb-1 block text-[13px] font-medium text-[var(--xds-text-secondary)]">{t("shareThumbnailSectionTitle")}</label>
+        <p className="mb-2 text-[13px] text-[var(--xds-text-secondary)]">{t("shareThumbnailSectionNote")}</p>
+        {settings?.thumbnail_asset_id && token && tenantId && (
+          <AuthImage
+            path={`/books/${id}/assets/${settings.thumbnail_asset_id}`}
+            token={token}
+            tenantId={tenantId}
+            alt={t("shareThumbnailSectionTitle")}
+            className="mb-2 aspect-video h-auto w-48 rounded-lg object-cover shadow-[var(--xds-shadow-card)]"
+          />
+        )}
+        <input
+          ref={shareThumbnailInputRef}
+          type="file"
+          accept="image/png,image/jpeg,image/webp"
+          onChange={uploadShareThumbnail}
+          disabled={shareThumbnailBusy || book.status !== "published"}
+          className="text-[13px]"
+        />
+      </div>
+
+      <div className="mt-5 border-t border-[var(--xds-border-light)] pt-4">
         <label className="mb-1 block text-[13px] font-medium text-[var(--xds-text-secondary)]">{t("backgroundSectionTitle")}</label>
         <p className="mb-2 text-[13px] text-[var(--xds-text-secondary)]">
           {settings?.has_background ? t("backgroundHasNote") : t("backgroundNoneNote")}
@@ -529,12 +579,12 @@ export default function BookDetailPage() {
       <p className="mb-2 text-[13px] text-[var(--xds-text-secondary)]">{t("shareEmbedHint")}</p>
       <textarea
         readOnly
-        value={embedCode(publicUrl)}
+        value={embedCode(publicPermalink)}
         onFocus={(e) => e.currentTarget.select()}
         rows={3}
         className="w-full rounded-lg border border-[var(--xds-border)] bg-[var(--xds-bg)] p-2.5 font-mono text-[12px] text-[var(--xds-text)]"
       />
-      <XButton variant="neutral" className="mt-2" icon={<XIcon name="copy" />} onClick={() => copyEmbedCode(embedCode(publicUrl))}>
+      <XButton variant="neutral" className="mt-2" icon={<XIcon name="copy" />} onClick={() => copyEmbedCode(embedCode(publicPermalink))}>
         {t("copyEmbedCode")}
       </XButton>
     </div>

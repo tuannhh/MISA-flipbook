@@ -1,10 +1,10 @@
 "use client";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { useAdminSession } from "@/lib/useSession";
 import { apiFetch, ApiError } from "@/lib/api";
-import type { AdminBook, AdminStats, Me } from "@/lib/types";
+import type { AdminBook, AdminBooksPage, AdminStats, Me } from "@/lib/types";
 import { AppHeader } from "@/components/AppHeader";
 import { MobileTopBar } from "@/components/MobileTopBar";
 import { MobileHeaderActions } from "@/components/MobileHeaderActions";
@@ -19,8 +19,10 @@ import { formatDateVN } from "@/lib/format";
 
 const PAGE_SIZE_OPTIONS = ["10", "20", "50"] as const;
 
-function dayNumber(d: Date): number {
-  return d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate();
+function dateParam(date: Date): string {
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${date.getFullYear()}-${month}-${day}`;
 }
 
 // F13-simplification: nguoi dung yeu cau don gian hoa toan bo trang Admin - bo Tenants/
@@ -39,30 +41,42 @@ export default function AdminPage() {
   const [me, setMe] = useState<Me | null>(null);
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [books, setBooks] = useState<AdminBook[] | null>(null);
+  const [booksTotal, setBooksTotal] = useState(0);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [forbidden, setForbidden] = useState(false);
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [dateFrom, setDateFrom] = useState<Date | null>(null);
   const [dateTo, setDateTo] = useState<Date | null>(null);
   const [pageSize, setPageSize] = useState<(typeof PAGE_SIZE_OPTIONS)[number]>("10");
-  const [page, setPage] = useState(1);
+  const [cursorHistory, setCursorHistory] = useState<Array<string | null>>([null]);
   const [deleteTarget, setDeleteTarget] = useState<{ ids: string[]; label: string } | null>(null);
+  const requestVersion = useRef(0);
 
   const load = useCallback(async () => {
     if (!token) return;
+    const request = ++requestVersion.current;
+    const query = new URLSearchParams({ limit: pageSize });
+    if (dateFrom) query.set("from", dateParam(dateFrom));
+    if (dateTo) query.set("to", dateParam(dateTo));
+    const activeCursor = cursorHistory.at(-1);
+    if (activeCursor) query.set("cursor", activeCursor);
     try {
       const [meRes, statsRes, booksRes] = await Promise.all([
         apiFetch<Me>("/me", { token }),
         apiFetch<AdminStats>("/admin/stats", { token }),
-        apiFetch<AdminBook[]>("/admin/books", { token }),
+        apiFetch<AdminBooksPage>(`/admin/books?${query.toString()}`, { token }),
       ]);
+      if (request !== requestVersion.current) return;
       if (!meRes.isSystemAdmin) {
         setForbidden(true);
         return;
       }
       setMe(meRes);
       setStats(statsRes);
-      setBooks(booksRes);
+      setBooks(booksRes.items);
+      setBooksTotal(booksRes.total);
+      setNextCursor(booksRes.nextCursor);
     } catch (err) {
       if (err instanceof ApiError && err.status === 403) {
         setForbidden(true);
@@ -70,32 +84,21 @@ export default function AdminPage() {
       }
       toast("error", err instanceof ApiError ? err.message : t("errorLoad"));
     }
-  }, [token, toast, t]);
+  }, [token, toast, t, pageSize, dateFrom, dateTo, cursorHistory]);
 
   useEffect(() => {
     if (ready) void load();
   }, [ready, load]);
 
   useEffect(() => {
-    setPage(1);
+    setCursorHistory([null]);
+    setSelected(new Set());
   }, [dateFrom, dateTo, pageSize]);
 
-  const filteredBooks = useMemo(() => {
-    if (!books) return [];
-    if (!dateFrom && !dateTo) return books;
-    return books.filter((b) => {
-      if (!b.published_at) return false;
-      const d = dayNumber(new Date(b.published_at));
-      if (dateFrom && d < dayNumber(dateFrom)) return false;
-      if (dateTo && d > dayNumber(dateTo)) return false;
-      return true;
-    });
-  }, [books, dateFrom, dateTo]);
-
   const pageSizeNum = Number(pageSize);
-  const totalPages = Math.max(1, Math.ceil(filteredBooks.length / pageSizeNum));
-  const pageClamped = Math.min(page, totalPages);
-  const pagedBooks = filteredBooks.slice((pageClamped - 1) * pageSizeNum, pageClamped * pageSizeNum);
+  const totalPages = Math.max(1, Math.ceil(booksTotal / pageSizeNum));
+  const pageClamped = cursorHistory.length;
+  const pagedBooks = books ?? [];
   const pagedIds = useMemo(() => pagedBooks.map((b) => b.id), [pagedBooks]);
   const allPagedSelected = pagedIds.length > 0 && pagedIds.every((id) => selected.has(id));
 
@@ -252,9 +255,9 @@ export default function AdminPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <XButton variant="icon" disabled={pageClamped <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))} icon={<XIcon name="chevron-left" />} aria-label={t("prevPage")} />
+          <XButton variant="icon" disabled={pageClamped <= 1} onClick={() => setCursorHistory((history) => history.slice(0, -1))} icon={<XIcon name="chevron-left" />} aria-label={t("prevPage")} />
           <span className="text-[13px] text-[var(--xds-text-secondary)]">{t("paginationInfo", { page: pageClamped, total: totalPages })}</span>
-          <XButton variant="icon" disabled={pageClamped >= totalPages} onClick={() => setPage((p) => Math.min(totalPages, p + 1))} icon={<XIcon name="chevron-right" />} aria-label={t("nextPage")} />
+          <XButton variant="icon" disabled={!nextCursor} onClick={() => nextCursor && setCursorHistory((history) => [...history, nextCursor])} icon={<XIcon name="chevron-right" />} aria-label={t("nextPage")} />
         </div>
       </div>
     </div>

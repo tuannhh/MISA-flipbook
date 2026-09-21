@@ -86,6 +86,8 @@ export interface PublicBook {
   hasBackground: boolean;
   /** F06: GA4 Measurement ID DA la gia tri hieu luc (uu tien sach, fallback tenant). */
   gaId: string | null;
+  /** Short-lived token scoped to one book/revision, never a dashboard JWT. */
+  readerToken: string;
   pages: ReaderPage[];
 }
 
@@ -100,6 +102,12 @@ export interface AdminBook {
   owner_email: string;
   published_at: string | null;
   views: number;
+}
+
+export interface AdminBooksPage {
+  items: AdminBook[];
+  total: number;
+  nextCursor: string | null;
 }
 
 /** F13-simplification: so lieu tong quan Admin dashboard (GET /admin/stats) - rut gon

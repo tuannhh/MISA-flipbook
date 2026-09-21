@@ -268,3 +268,12 @@ Tên/tag thực chỉ tạo sau khi người dùng nói “ổn rồi” cho phi
 - Đợt 2 core: PDF process isolation, deadline/budgets, stream upload, tenant source quota, job lease/fencing/retry và EDGE-01 đã có code + Docker regression.
 - Đợt 2 còn mở: tổng storage accounting/retention/orphan collector, soak kill/restart diện rộng.
 - Chưa chốt stable; tiếp theo là reader/security residual, tính đúng đắn nội dung và vận hành theo báo cáo tiếp quản.
+
+## Candidate Codex 21/09/2026 — hoàn tất các residual ưu tiên
+
+Đã hoàn tất reader session scoped/revision-pinned, analytics idempotent, cache transition
+an toàn, CropBox/Rotate + URL sanitizer, thumbnail chia sẻ 16:9, public URL canonical,
+windowed image loading/mobile accessibility, phân trang keyset Admin và runbook backup/restore.
+Tất cả được kiểm chứng trên Docker stack riêng; xem `MEMORYBANK.md` và
+`handoffs/HF-20260921-02.md`. Mốc này là **candidate**, không phải stable: chờ người dùng
+xác nhận và vẫn còn device/mobile thật, proxy/CDN, retention và object storage production.

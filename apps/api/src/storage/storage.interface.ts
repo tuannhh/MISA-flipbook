@@ -5,6 +5,8 @@ export interface StorageAdapter {
    * bao gio dung ten file nguoi dung upload (ARCHITECTURE.md muc 2). */
   saveBuffer(objectKey: string, data: Buffer): Promise<{ bytes: number }>;
   adoptFile(objectKey: string, sourcePath: string): Promise<void>;
+  /** Remove a generated/orphaned object after a failed operation. */
+  delete(objectKey: string): Promise<void>;
   /** Doc toan bo file (dung cho file nho nhu manifest.json). */
   readBuffer(objectKey: string): Promise<Buffer>;
   /** Stream file (dung cho anh trang/PDF khi tra ve HTTP response, tranh doc het vao RAM). */

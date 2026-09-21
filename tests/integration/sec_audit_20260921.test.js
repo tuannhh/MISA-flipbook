@@ -179,8 +179,8 @@ async function main() {
   const publicAssetId = publicAssetRes.data.pages[0]?.imageAssetId;
   const publicAssetHeaders = await fetch(`${BASE}/public/books/${permalink2}/assets/${publicAssetId}`);
   check(
-    "sach cong khai thuong: van cache public/immutable (khong doi hanh vi/hieu nang cho sach khong co gi can bao ve)",
-    (publicAssetHeaders.headers.get("cache-control") || "").includes("public"),
+    "sach cong khai thuong: cache public nhung buoc tai xac thuc de doi Public -> Private khong lo cache cu",
+    publicAssetHeaders.headers.get("cache-control") === "public, max-age=0, must-revalidate",
     publicAssetHeaders.headers.get("cache-control")
   );
 

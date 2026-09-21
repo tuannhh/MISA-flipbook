@@ -1,5 +1,5 @@
 "use client";
-import { ReactNode, useEffect } from "react";
+import { ReactNode, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { XIcon } from "./icons/XIcon";
 
@@ -28,16 +28,49 @@ export function XDialog({
   children?: ReactNode;
   footer?: ReactNode;
 }) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
+
   useEffect(() => {
     if (!open) return;
+    returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const focusDialog = window.setTimeout(() => {
+      const initial = dialogRef.current?.querySelector<HTMLElement>("[autofocus], [data-dialog-initial-focus]");
+      const fallback = dialogRef.current?.querySelector<HTMLElement>(
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled])'
+      );
+      (initial ?? fallback ?? dialogRef.current)?.focus();
+    }, 0);
     function onKeydown(e: KeyboardEvent) {
       if (e.key === "Escape") onOpenChange(false);
+      if (e.key !== "Tab" || !dialogRef.current) return;
+      const focusable = Array.from(
+        dialogRef.current.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        )
+      );
+      if (focusable.length === 0) {
+        e.preventDefault();
+        dialogRef.current.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
     }
     document.addEventListener("keydown", onKeydown);
     document.body.style.overflow = "hidden";
     return () => {
+      window.clearTimeout(focusDialog);
       document.removeEventListener("keydown", onKeydown);
       document.body.style.overflow = "";
+      returnFocusRef.current?.focus();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
@@ -64,6 +97,8 @@ export function XDialog({
       }}
     >
       <div
+        ref={dialogRef}
+        tabIndex={-1}
         className="flex max-h-[calc(100vh-64px)] w-full flex-col rounded-lg bg-[var(--xds-bg)] shadow-xl"
         style={{ maxWidth: widthStyle }}
       >

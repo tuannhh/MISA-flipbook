@@ -3,6 +3,7 @@ import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { apiFetch, ApiError, assetUrl } from "@/lib/api";
 import { getToken } from "@/lib/auth";
+import { canonicalReaderUrl } from "@/lib/public-reader-url";
 import type { PublicBook } from "@/lib/types";
 import { FlipBook } from "@/components/FlipBook";
 import { XInput } from "@/components/xds/XInput";
@@ -50,7 +51,7 @@ function useGoogleAnalytics(gaId: string | null | undefined) {
  * ca 2 duong deu phai giu nguyen kiem tra mat khau ("giu day du mat khau/quyen" trong
  * PLAN.md), nen tach logic fetch/xac thuc ra day thay vi chep lai 2 lan.
  */
-export function PublicBookReader({ permalink, embed = false }: { permalink: string; embed?: boolean }) {
+export function PublicBookReader({ permalink, embed = false, initialPage }: { permalink: string; embed?: boolean; initialPage?: number }) {
   const t = useTranslations("reader");
   const [book, setBook] = useState<PublicBook | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -58,9 +59,12 @@ export function PublicBookReader({ permalink, embed = false }: { permalink: stri
   const [passwordInput, setPasswordInput] = useState("");
   const [passwordError, setPasswordError] = useState<string | null>(null);
   const [verifying, setVerifying] = useState(false);
-  const [accessToken, setAccessToken] = useState<string | null>(null);
+  // This is a short-lived, book/revision-scoped reader credential. It is never the
+  // Creator/Admin login JWT, even when the owner opens a private book.
+  const [readerToken, setReaderToken] = useState<string | null>(null);
   const [privateBlocked, setPrivateBlocked] = useState(false);
   const lastPingedPageRef = useRef<number | null>(null);
+  const openPingedRef = useRef(false);
 
   // F12: ghi nhan "luot xem trang" - 1 ping moi khi sang trang/spread MOI (bo qua neu
   // trung trang vua ping, tranh dem trung khi remount noi bo cua react-pageflip, vd luc
@@ -71,11 +75,11 @@ export function PublicBookReader({ permalink, embed = false }: { permalink: stri
       lastPingedPageRef.current = page;
       apiFetch(`/public/books/${permalink}/events`, {
         method: "POST",
-        token: accessToken,
-        body: { eventType: "page_view" },
+        token: readerToken,
+        body: { eventType: "page_view", page },
       }).catch(() => {});
     },
-    [permalink, accessToken]
+    [permalink, readerToken]
   );
 
   const load = useCallback(
@@ -84,6 +88,8 @@ export function PublicBookReader({ permalink, embed = false }: { permalink: stri
       apiFetch<PublicBook>(`/public/books/${permalink}`, token ? { token } : {})
         .then((b) => {
           setBook(b);
+          setReaderToken(b.readerToken);
+          if (typeof window !== "undefined") sessionStorage.setItem(tokenStorageKey(permalink), b.readerToken);
           setPasswordRequired(false);
           setPrivateBlocked(false);
           if (!embed && typeof document !== "undefined") document.title = `${b.title} - MISA Flipbook`;
@@ -97,14 +103,8 @@ export function PublicBookReader({ permalink, embed = false }: { permalink: stri
               // xem logic tuong ung o public-books.controller.ts (resolveActor).
               const loginToken = !triedLoginToken ? getToken() : null;
               if (loginToken && loginToken !== token) {
-                // UI-01 (audit codex 21/09/2026): phai cap nhat luon accessToken sang
-                // loginToken o day - neu khong, manifest tai duoc bang loginToken nhung
-                // FlipBook van dung accessToken cu (null/rong) de gan vao URL anh/nen/tai
-                // xuong -> toan bo anh 403 du manifest da 200 (owner mo sach Private cua
-                // chinh minh nhung 12/12 anh loi). Xem getAuthorizedBook trong
-                // public-books.controller.ts: cung mot token phai dung cho ca manifest
-                // lan asset.
-                setAccessToken(loginToken);
+                // The API exchanges this dashboard JWT for a limited reader token in
+                // its JSON response. Do not retain or append the login credential.
                 load(loginToken, true);
                 return;
               }
@@ -124,12 +124,27 @@ export function PublicBookReader({ permalink, embed = false }: { permalink: stri
 
   useEffect(() => {
     const stored = typeof window !== "undefined" ? sessionStorage.getItem(tokenStorageKey(permalink)) : null;
-    if (stored) setAccessToken(stored);
+    if (stored) setReaderToken(stored);
     load(stored);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [permalink]);
 
   useGoogleAnalytics(book?.gaId);
+
+  useEffect(() => {
+    if (!book || !readerToken || openPingedRef.current) return;
+    openPingedRef.current = true;
+    apiFetch(`/public/books/${permalink}/events`, {
+      method: "POST",
+      token: readerToken,
+      body: { eventType: "open" },
+    }).catch(() => {});
+  }, [book, permalink, readerToken]);
+
+  useEffect(() => {
+    openPingedRef.current = false;
+    lastPingedPageRef.current = null;
+  }, [permalink]);
 
   async function submitPassword(e: FormEvent) {
     e.preventDefault();
@@ -137,14 +152,14 @@ export function PublicBookReader({ permalink, embed = false }: { permalink: stri
     setVerifying(true);
     setPasswordError(null);
     try {
-      const res = await apiFetch<{ accessToken: string }>(`/public/books/${permalink}/verify-password`, {
+      const res = await apiFetch<{ readerToken: string }>(`/public/books/${permalink}/verify-password`, {
         method: "POST",
         body: { password: passwordInput },
       });
-      sessionStorage.setItem(tokenStorageKey(permalink), res.accessToken);
-      setAccessToken(res.accessToken);
+      sessionStorage.setItem(tokenStorageKey(permalink), res.readerToken);
+      setReaderToken(res.readerToken);
       setPasswordInput("");
-      load(res.accessToken);
+      load(res.readerToken);
     } catch (err) {
       setPasswordError(err instanceof ApiError ? err.message : t("errorVerify"));
     } finally {
@@ -204,17 +219,17 @@ export function PublicBookReader({ permalink, embed = false }: { permalink: stri
     );
   }
 
-  const tokenSuffix = accessToken ? `?token=${encodeURIComponent(accessToken)}` : "";
+  const tokenSuffix = readerToken ? `?token=${encodeURIComponent(readerToken)}` : "";
   // Trong embed (F09), link "chia se" nen tro ve trang doc day du (khong phai chinh
   // URL embed) - nguon chia se hop ly la ban thuc su, khong phai khung nhung ben trong
   // site khac. Ngoai embed, dung dung URL hien tai.
-  const shareUrl =
-    typeof window !== "undefined" ? (embed ? window.location.href.replace(/\/embed\/?$/, "") : window.location.href) : undefined;
+  const shareUrl = typeof window !== "undefined" ? canonicalReaderUrl(permalink, window.location.origin) : undefined;
 
   return (
     <FlipBook
       title={book.title}
       pages={book.pages}
+      initialPage={initialPage}
       imageUrl={(assetId) => assetUrl(`/public/books/${permalink}/assets/${assetId}`) + tokenSuffix}
       shareUrl={embed ? undefined : shareUrl}
       downloadUrl={book.allowDownload ? assetUrl(`/public/books/${permalink}/download`) + tokenSuffix : null}

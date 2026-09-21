@@ -15,13 +15,14 @@ import pathlib
 import os
 import math
 import time
+from urllib.parse import urlsplit
 from dataclasses import dataclass, field
 
 import pypdfium2 as pdfium
 from pypdf import PdfReader
 from pypdf.errors import FileNotDecryptedError, PdfReadError
 from pypdf.generic import ArrayObject
-from PIL import Image
+from PIL import Image, ImageOps
 
 READING_WIDTH_PX = 1600
 THUMB_WIDTH_PX = 320
@@ -30,6 +31,9 @@ MAX_PAGES = int(os.getenv("PDF_MAX_PAGES", "500"))
 MAX_PAGE_PIXELS = int(os.getenv("PDF_MAX_PAGE_PIXELS", "8000000"))
 MAX_OUTPUT_BYTES = int(os.getenv("PDF_MAX_OUTPUT_BYTES", "536870912"))
 MAX_SOURCE_BYTES = int(os.getenv("PDF_MAX_BYTES", "209715200"))
+SHARE_THUMBNAIL_WIDTH = 1200
+SHARE_THUMBNAIL_HEIGHT = 675
+MAX_SHARE_THUMBNAIL_PIXELS = int(os.getenv("SHARE_THUMBNAIL_MAX_PIXELS", "32000000"))
 
 
 class ConversionError(Exception):
@@ -37,6 +41,40 @@ class ConversionError(Exception):
         super().__init__(message)
         self.reason = reason  # 'needs_password' | 'corrupted_or_invalid' | 'invalid_signature'
         self.message = message
+
+
+def convert_share_thumbnail(source_path: pathlib.Path, output_path: pathlib.Path) -> int:
+    """Create one deterministic 16:9 WebP cover without trusting image metadata."""
+    try:
+        with Image.open(source_path) as opened:
+            if opened.width < 1 or opened.height < 1 or opened.width * opened.height > MAX_SHARE_THUMBNAIL_PIXELS:
+                raise ConversionError("pixel_limit", "Anh nguon vuot gioi han kich thuoc.")
+            image = ImageOps.exif_transpose(opened).convert("RGB")
+            target_aspect = SHARE_THUMBNAIL_WIDTH / SHARE_THUMBNAIL_HEIGHT
+            source_aspect = image.width / image.height
+            if source_aspect > target_aspect:
+                crop_width = round(image.height * target_aspect)
+                left = (image.width - crop_width) // 2
+                crop = image.crop((left, 0, left + crop_width, image.height))
+            else:
+                crop_height = round(image.width / target_aspect)
+                top = (image.height - crop_height) // 2
+                crop = image.crop((0, top, image.width, top + crop_height))
+            try:
+                rendered = crop.resize((SHARE_THUMBNAIL_WIDTH, SHARE_THUMBNAIL_HEIGHT), Image.Resampling.LANCZOS)
+                try:
+                    output_path.parent.mkdir(parents=True, exist_ok=True)
+                    rendered.save(output_path, "WEBP", quality=86, method=4)
+                finally:
+                    rendered.close()
+            finally:
+                crop.close()
+                image.close()
+    except ConversionError:
+        raise
+    except (OSError, ValueError) as exc:
+        raise ConversionError("invalid_image", "Anh khong the xu ly.") from exc
+    return output_path.stat().st_size
 
 
 @dataclass
@@ -49,19 +87,46 @@ class PageManifest:
     links: list = field(default_factory=list)
 
 
-def _normalize_rect(rect, page_w, page_h, rotation):
+def _normalize_rect(rect, crop_box, rotation):
+    """Map a PDF annotation rectangle into the pixels emitted by PDFium.
+
+    PDF annotation coordinates are expressed in the page's unrotated user space.
+    PDFium renders the effective CropBox and then applies /Rotate.  Normalising
+    against MediaBox (or applying the inverse rotation) shifts hit areas on many
+    production PDFs, particularly exports with bleed/crop marks.
+    """
+    crop_x0, crop_y0, crop_x1, crop_y1 = crop_box
+    crop_w, crop_h = crop_x1 - crop_x0, crop_y1 - crop_y0
+    if crop_w <= 0 or crop_h <= 0:
+        return None
     x0, y0, x1, y1 = rect
-    nx0, nx1 = sorted([x0 / page_w, x1 / page_w])
-    ny0, ny1 = sorted([1 - y1 / page_h, 1 - y0 / page_h])
+    x0, x1 = sorted((max(crop_x0, min(x0, crop_x1)), max(crop_x0, min(x1, crop_x1))))
+    y0, y1 = sorted((max(crop_y0, min(y0, crop_y1)), max(crop_y0, min(y1, crop_y1))))
+    if x1 <= x0 or y1 <= y0:
+        return None
+    nx0, nx1 = (x0 - crop_x0) / crop_w, (x1 - crop_x0) / crop_w
+    ny0, ny1 = 1 - (y1 - crop_y0) / crop_h, 1 - (y0 - crop_y0) / crop_h
     if rotation == 0:
         return [nx0, ny0, nx1, ny1]
     if rotation == 90:
-        return [ny0, 1 - nx1, ny1, 1 - nx0]
+        return [1 - ny1, nx0, 1 - ny0, nx1]
     if rotation == 180:
         return [1 - nx1, 1 - ny1, 1 - nx0, 1 - ny0]
     if rotation == 270:
-        return [1 - ny1, nx0, 1 - ny0, nx1]
+        return [ny0, 1 - nx1, ny1, 1 - nx0]
     return [nx0, ny0, nx1, ny1]
+
+
+def _safe_external_uri(value) -> str | None:
+    """Only pass schemes that the browser may safely navigate from a reader page."""
+    uri = str(value).strip()
+    parsed = urlsplit(uri)
+    scheme = parsed.scheme.lower()
+    if scheme in {"http", "https"} and parsed.netloc:
+        return uri
+    if scheme in {"mailto", "tel"} and parsed.path:
+        return uri
+    return None
 
 
 def _resolve_dest_page(reader: PdfReader, dest) -> int | None:
@@ -95,9 +160,8 @@ def _extract_links(pdf_path: pathlib.Path, password: str | None):
         raise ConversionError("page_limit", f"PDF vuot gioi han {MAX_PAGES} trang.")
     for page in reader.pages:
         rotation = int(page.get("/Rotate", 0)) % 360
-        mediabox = page.mediabox
-        page_w = float(mediabox.width)
-        page_h = float(mediabox.height)
+        cropbox = page.cropbox
+        crop_box = (float(cropbox.left), float(cropbox.bottom), float(cropbox.right), float(cropbox.top))
         links = []
         annots = page.get("/Annots")
         if annots:
@@ -106,11 +170,15 @@ def _extract_links(pdf_path: pathlib.Path, password: str | None):
                 if obj.get("/Subtype") != "/Link":
                     continue
                 rect = [float(v) for v in obj.get("/Rect", [0, 0, 0, 0])]
-                entry = {"rect_norm": _normalize_rect(rect, page_w, page_h, rotation)}
+                rect_norm = _normalize_rect(rect, crop_box, rotation)
+                if rect_norm is None:
+                    continue
+                entry = {"rect_norm": rect_norm}
                 uri_action = obj.get("/A")
                 if uri_action and uri_action.get("/S") == "/URI":
-                    entry["type"] = "external_uri"
-                    entry["target"] = str(uri_action.get("/URI"))
+                    target = _safe_external_uri(uri_action.get("/URI"))
+                    entry["type"] = "external_uri" if target else "unsupported_action"
+                    entry["target"] = target
                 elif obj.get("/Dest") is not None or (
                     uri_action and uri_action.get("/S") == "/GoTo"
                 ):
@@ -126,7 +194,7 @@ def _extract_links(pdf_path: pathlib.Path, password: str | None):
                     entry["type"] = "unsupported_action"
                     entry["target"] = None
                 links.append(entry)
-        per_page.append({"rotation": rotation, "width_pt": page_w, "height_pt": page_h, "links": links})
+        per_page.append({"rotation": rotation, "width_pt": crop_box[2] - crop_box[0], "height_pt": crop_box[3] - crop_box[1], "links": links})
     return per_page
 
 

@@ -8,5 +8,7 @@ export interface AuthedRequest extends Request {
   tenantId?: string;
   userId: string;
   pdfChecksum?: string;
+  uploadContentType?: "image/png" | "image/jpeg" | "image/webp";
   rollbackFiles?: string[];
+  afterCommitTasks?: Array<() => Promise<void>>;
 }

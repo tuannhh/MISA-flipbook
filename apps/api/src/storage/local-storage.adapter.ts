@@ -44,6 +44,10 @@ export class LocalStorageAdapter implements StorageAdapter {
     await fs.promises.rename(sourcePath, full);
   }
 
+  async delete(objectKey: string): Promise<void> {
+    await fs.promises.rm(this.resolveSafe(objectKey), { force: true });
+  }
+
   createReadStream(objectKey: string): fs.ReadStream {
     return fs.createReadStream(this.resolveSafe(objectKey));
   }

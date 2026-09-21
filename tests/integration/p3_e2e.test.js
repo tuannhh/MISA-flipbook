@@ -133,25 +133,25 @@ async function main() {
   check("sai mat khau -> 401", wrongPw.status === 401, wrongPw.data);
 
   const rightPw = await api("POST", `/public/books/${permalink}/verify-password`, { json: { password: "MatKhauBiMat123" } });
-  check("dung mat khau -> 201/200, tra ve accessToken", (rightPw.status === 200 || rightPw.status === 201) && !!rightPw.data?.accessToken, rightPw.data);
-  const accessToken = rightPw.data.accessToken;
+  check("dung mat khau -> 201/200, tra ve readerToken gioi han dung sach/revision", (rightPw.status === 200 || rightPw.status === 201) && !!rightPw.data?.readerToken, rightPw.data);
+  const readerToken = rightPw.data.readerToken;
 
-  const withToken = await api("GET", `/public/books/${permalink}?token=${encodeURIComponent(accessToken)}`);
-  check("co accessToken (query) -> xem duoc sach", withToken.status === 200 && withToken.data.pages.length > 0, withToken.data);
+  const withToken = await api("GET", `/public/books/${permalink}?token=${encodeURIComponent(readerToken)}`);
+  check("co readerToken (query) -> xem duoc sach", withToken.status === 200 && withToken.data.pages.length > 0, withToken.data);
 
-  const withHeaderToken = await api("GET", `/public/books/${permalink}`, { token: accessToken });
-  check("co accessToken (header Authorization) -> xem duoc sach", withHeaderToken.status === 200, withHeaderToken.data);
+  const withHeaderToken = await api("GET", `/public/books/${permalink}`, { token: readerToken });
+  check("co readerToken (header Authorization) -> xem duoc sach", withHeaderToken.status === 200, withHeaderToken.data);
 
   const assetIdProtected = withToken.data.pages[0].imageAssetId;
   const assetNoToken = await api("GET", `/public/books/${permalink}/assets/${assetIdProtected}`);
   check("anh trang cua sach co mat khau, KHONG token -> tu choi (khong lo anh)", assetNoToken.status === 403 || assetNoToken.status === 404, assetNoToken.data);
-  const assetWithToken = await api("GET", `/public/books/${permalink}/assets/${assetIdProtected}?token=${encodeURIComponent(accessToken)}`);
+  const assetWithToken = await api("GET", `/public/books/${permalink}/assets/${assetIdProtected}?token=${encodeURIComponent(readerToken)}`);
   check("anh trang co token dung -> 200", assetWithToken.status === 200, assetWithToken.data);
 
   console.log("\nTest: doi mat khau lam access_epoch tang -> token cu het hieu luc ngay.");
   const changePw = await api("PUT", `/books/${bookId}/settings`, { token, tenantId, json: { password: "MatKhauMoi456" } });
   check("doi mat khau thanh cong", changePw.status === 200, changePw.data);
-  const oldTokenAfterChange = await api("GET", `/public/books/${permalink}`, { token: accessToken });
+  const oldTokenAfterChange = await api("GET", `/public/books/${permalink}`, { token: readerToken });
   check(
     "token cu (mat khau cu) bi tu choi sau khi doi mat khau (access_epoch da tang)",
     oldTokenAfterChange.status === 403 && oldTokenAfterChange.data?.passwordRequired === true,
@@ -208,7 +208,7 @@ async function main() {
   const downloadNoToken = await api("GET", `/public/books/${permalink}/download`);
   check("co mat khau + khong token -> tai xuong bi chan (403 passwordRequired)", downloadNoToken.status === 403 && downloadNoToken.data?.passwordRequired === true, downloadNoToken.data);
   const verifyForDownload = await api("POST", `/public/books/${permalink}/verify-password`, { json: { password: "TaiXuongCanMatKhau789" } });
-  const downloadWithToken = await api("GET", `/public/books/${permalink}/download?token=${encodeURIComponent(verifyForDownload.data.accessToken)}`, { asBuffer: true });
+  const downloadWithToken = await api("GET", `/public/books/${permalink}/download?token=${encodeURIComponent(verifyForDownload.data.readerToken)}`, { asBuffer: true });
   check("co mat khau + token dung -> tai xuong thanh cong", downloadWithToken.status === 200 && downloadWithToken.data.subarray(0, 5).toString() === "%PDF-", downloadWithToken.status);
   await api("PUT", `/books/${bookId}/settings`, { token, tenantId, json: { removePassword: true } });
 
@@ -219,8 +219,25 @@ async function main() {
 
   const publicV1 = await api("GET", `/public/books/${permalink}`);
   const pageCountV1 = publicV1.data.pages.length;
+  const v1ReaderToken = publicV1.data.readerToken;
+  const v1FirstAssetId = publicV1.data.pages[0].imageAssetId;
+  const statsBeforeEvents = await api("GET", `/books/${bookId}/stats?days=1`, { token, tenantId });
+  const beforeToday = statsBeforeEvents.data.at(-1) ?? { opens: 0, page_views: 0 };
+  const openOne = await api("POST", `/public/books/${permalink}/events`, { token: v1ReaderToken, json: { eventType: "open" } });
+  const openDuplicate = await api("POST", `/public/books/${permalink}/events`, { token: v1ReaderToken, json: { eventType: "open" } });
+  const pageOne = await api("POST", `/public/books/${permalink}/events`, { token: v1ReaderToken, json: { eventType: "page_view", page: 1 } });
+  const pageDuplicate = await api("POST", `/public/books/${permalink}/events`, { token: v1ReaderToken, json: { eventType: "page_view", page: 1 } });
+  const statsAfterEvents = await api("GET", `/books/${bookId}/stats?days=1`, { token, tenantId });
+  const afterToday = statsAfterEvents.data.at(-1) ?? { opens: 0, page_views: 0 };
+  check("reader event open/page_view duoc nhan va retry cung phien khong dem trung", openOne.data?.counted === true && openDuplicate.data?.counted === false && pageOne.data?.counted === true && pageDuplicate.data?.counted === false && Number(afterToday.opens) === Number(beforeToday.opens) + 1 && Number(afterToday.page_views) === Number(beforeToday.page_views) + 1, { openOne: openOne.data, openDuplicate: openDuplicate.data, pageOne: pageOne.data, pageDuplicate: pageDuplicate.data, beforeToday, afterToday });
 
   const revisionV2 = await uploadAndPublish(bookId, token, tenantId, "v2.pdf");
+  const pinnedV1Asset = await api("GET", `/public/books/${permalink}/assets/${v1FirstAssetId}?token=${encodeURIComponent(v1ReaderToken)}`);
+  check(
+    "reader da mo revision v1 truoc khi replace van tai duoc asset v1 bang phien doc da pin (khong vo trang giua luc dang doc)",
+    pinnedV1Asset.status === 200,
+    pinnedV1Asset.data
+  );
   check("upload+publish revision v2 thanh cong, khac id voi v1", !!revisionV2 && revisionV2 !== revisionV1, { revisionV1, revisionV2 });
 
   const bookAfterReplace = await api("GET", `/books/${bookId}`, { token, tenantId });

@@ -1634,3 +1634,41 @@ Baseline 745e28c. Đã đọc CLAUDE-RESPONSE-20260921 và kiểm chứng lại.
 Đã triển khai PDF supervisor dùng subprocess riêng + kill/reap deadline; disk-stream upload với DB preflight ngắn, kiểm quyền lại sau body; giới hạn file/trang/pixel/output/RAM/CPU; quota nguồn và pending jobs theo tenant; job generation/lease/heartbeat/fenced completion, DB retries và unique assets; ON CONFLICT slug và serialize revision number. Migrations 0015/0016. Chi tiết thiết kế, kiểm chứng và giới hạn ở [báo cáo tiếp quản](docs/audits/20260921-codex-followup.md).
 
 Kiểm chứng trên stack Docker RIÊNG misa-flipbook-codex-test: 123 assertion regression cũ + 12 job + 6 upload; 7 test case Python supervisor. Stack người dùng đang dùng chưa thay đổi. Không gắn stable tag. Giao thức job mới yêu cầu triển khai dispatcher/worker đồng bộ, không rolling mix với worker cũ. Chưa đóng toàn bộ PDF-02: accounting dung lượng ảnh/attempt mồ côi và retention collector còn mở. PERF/reader và đợt vận hành chưa thực hiện trong thay đổi này.
+
+## Codex — Reader, nội dung và vận hành (21/09/2026, candidate sau audit)
+
+Đợt tiếp theo đã hoàn tất trên nhánh tách biệt, kế thừa baseline pipeline `d000b18`.
+Mục tiêu là đóng các finding còn lại mà không phủ nhận phần Claude đã sửa đúng.
+
+- **Reader và bảo mật:** Dashboard JWT chỉ dùng một lần để đổi lấy reader token có scope
+  đúng một sách/revision, TTL ngắn và access epoch. Token cũ mất hiệu lực ngay khi đổi
+  mật khẩu/visibility; owner token kiểm tra lại tài khoản/membership ở từng request.
+  Reader đang mở được ghim revision cũ cho tới hết phiên, vì thế thay PDF không làm trắng
+  trang giữa lúc đọc. Sự kiện `open`/`page_view` được deduplicate bằng session ID ở DB;
+  metadata SSR không còn tự ghi lượt mở. Asset protected là `private, no-store`; asset
+  public buộc tái xác thực (`public, max-age=0, must-revalidate`) để đổi Public →
+  Password/Private không rò từ cache cũ. Khi rollout qua CDN phải purge cache cũ một lần.
+- **PDF/nội dung:** hyperlink dùng CropBox và chiều Rotate đúng với ảnh PDFium; chỉ cho
+  `https/http`, `mailto`, `tel`, chặn `javascript:`, `data:` và protocol-relative URL.
+  Thumbnail chia sẻ nhận PNG/JPEG/WebP tối đa 8 MB qua disk-streamed upload, worker riêng
+  chuyển thành WebP 1200×675; metadata Open Graph lấy cover này. Sách protected chủ động
+  không có preview cho crawler.
+- **Trải nghiệm:** public URL chuẩn là `/<slug>-<8 ký tự>` và embed là `/.../embed`, vẫn
+  giữ `/read/...` cho link cũ. Reader preload theo cửa sổ viewport thay vì toàn bộ sách,
+  touch/coarse pointer luôn hiển thị một trang, có page jump + thumbnail navigator, target
+  tối thiểu 48px và dialog trap focus. Admin books dùng keyset cursor trên server thay cho
+  tải cố định 500 dòng ở client.
+- **Vận hành:** backup/restore script có manifest + SHA-256 và bắt buộc `--quiesce`; chỉ
+  dùng cho pilot volume local. Restore script là thao tác phá hủy và phải chạy trên staging
+  trước khi dùng production. Chưa coi script mới là restore drill production.
+
+**Bằng chứng thực thi trên Docker stack riêng `misa-flipbook-codex-review` (cổng 13000/13001):**
+migration 0001–0019 chạy sạch; API build và Next production build pass. Test tích hợp có
+kết quả: P1 13+14, P2 22, P3 35, F16 12, P5 21, security audit 14, pipeline job lease 12,
+pipeline upload 6, Python PDF worker 13. Không chạy trên stack Docker chính của người dùng.
+
+**Giới hạn còn mở trước stable:** chưa có test thiết bị mobile thật cho UI mới, chưa có PDF
+thật chứa audio/video, chưa có CDN/proxy production để xác minh purge/trust-proxy, chưa có
+retention collector cho artifact attempt mồ côi hoặc accounting ảnh dẫn xuất, và chưa có
+object storage/HA production. Candidate handoff ở `handoffs/HF-20260921-02.md`; chưa gắn tag
+stable cho tới khi người dùng xác nhận bản này ổn.

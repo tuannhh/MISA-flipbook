@@ -1,52 +1,93 @@
 #!/usr/bin/env bash
-# Backup DB + object storage cho MISA Flipbook (Docker Compose).
-# Tu dong hoa dung quy trinh da kiem chung that trong drill P5 (xem MEMORYBANK.md muc
-# "P5 - UAT va phat hanh", handoffs/HF-20260917-01.md muc Runbook) - khong doi lenh, chi
-# dong goi lai thanh script chay lap lai duoc (cron/Task Scheduler).
-#
-# Cach dung:
-#   BACKUP_DIR=/duong/dan/luu/backup ./backup.sh
-#   (mac dinh BACKUP_DIR=./backups canh script nay neu khong dat bien moi truong)
-#
-# Yeu cau: dang chay tu may co Docker Compose stack nay dang "up" (postgres + 1 container
-# bat ky co mount volume storage, vd container "api").
+# Consistent Docker backup: PostgreSQL dump and storage are captured only while all
+# writers are quiesced. It is intentionally explicit because a DB dump paired with a
+# concurrently changing object volume cannot be restored as one coherent flipbook.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COMPOSE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 BACKUP_DIR="${BACKUP_DIR:-$SCRIPT_DIR/../backups}"
-TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
-OUT_DIR="$BACKUP_DIR/$TIMESTAMP"
 POSTGRES_USER="${POSTGRES_USER:-misa_admin}"
 POSTGRES_DB="${POSTGRES_DB:-misa_flipbook}"
 STORAGE_VOLUME="${STORAGE_VOLUME:-misa-flipbook_storage_data}"
+WRITERS=(api dispatcher worker-convert pdf-worker)
+QUIESCE=false
 
+usage() {
+  echo "Usage: $0 --quiesce [--output DIRECTORY]"
+  echo "  --quiesce   stop API and PDF/job writers while the DB and storage pair is captured"
+  echo "  --output    parent directory for timestamped backup folders (default: $BACKUP_DIR)"
+}
+
+while (($#)); do
+  case "$1" in
+    --quiesce) QUIESCE=true ;;
+    --output) BACKUP_DIR="${2:?--output needs a directory}"; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) usage >&2; exit 2 ;;
+  esac
+  shift
+done
+
+if [[ "$QUIESCE" != true ]]; then
+  echo "Refusing an inconsistent backup. Re-run with --quiesce." >&2
+  exit 2
+fi
+command -v docker >/dev/null || { echo "Docker is required." >&2; exit 1; }
+
+TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
+OUT_DIR="$BACKUP_DIR/$TIMESTAMP"
 mkdir -p "$OUT_DIR"
 cd "$COMPOSE_DIR"
+
+declare -a RUNNING_WRITERS=()
+for service in "${WRITERS[@]}"; do
+  if [[ -n "$(docker compose ps -q "$service")" ]] && [[ "$(docker compose ps --status running -q "$service")" != "" ]]; then
+    RUNNING_WRITERS+=("$service")
+  fi
+done
+
+restore_writers() {
+  if ((${#RUNNING_WRITERS[@]})); then
+    docker compose start "${RUNNING_WRITERS[@]}" >/dev/null || true
+  fi
+}
+trap restore_writers EXIT
+
+if ((${#RUNNING_WRITERS[@]})); then
+  echo "==> Quiescing writers: ${RUNNING_WRITERS[*]}"
+  docker compose stop "${RUNNING_WRITERS[@]}"
+fi
+
 POSTGRES_CID="$(docker compose ps -q postgres)"
+[[ -n "$POSTGRES_CID" ]] || { echo "Postgres container is not available." >&2; exit 1; }
 
-echo "==> Backup DB ($POSTGRES_DB) vao $OUT_DIR/db.dump ..."
-# MSYS_NO_PATHCONV=1 chi dat cho LENH co path tuyet doi BEN TRONG container (vd /tmp/...)
-# - tranh Git Bash/Windows tu doi path sai truoc khi toi Docker. KHONG dat cho lenh
-# "docker compose" resolve file tren host (se lam hong chinh duong dan docker-compose.yml).
-MSYS_NO_PATHCONV=1 docker compose exec -T postgres \
-  pg_dump -U "$POSTGRES_USER" -Fc -d "$POSTGRES_DB" -f /tmp/backup.dump
-# KHONG dat MSYS_NO_PATHCONV o day: can Git Bash tu dong doi $OUT_DIR (dang /c/Users/...)
-# sang duong dan Windows that cho tham so DICH cua docker cp; tham so NGUON (CID:/tmp/...)
-# khong bat dau bang "/" nen khong bi anh huong.
-docker cp "$POSTGRES_CID:/tmp/backup.dump" "$OUT_DIR/db.dump"
+echo "==> Writing PostgreSQL custom dump"
+docker compose exec -T postgres pg_dump -U "$POSTGRES_USER" -Fc -d "$POSTGRES_DB" -f /tmp/misa-flipbook-backup.dump
+docker cp "$POSTGRES_CID:/tmp/misa-flipbook-backup.dump" "$OUT_DIR/db.dump"
+docker compose exec -T postgres rm -f /tmp/misa-flipbook-backup.dump
 
-echo "==> Backup storage volume ($STORAGE_VOLUME) vao $OUT_DIR/storage.tar.gz ..."
-# MSYS_NO_PATHCONV=1 bat buoc o day: neu khong, Git Bash tu doi CA phan container-path
-# (":/backup", ":/data") trong tung tham so "-v host:container" thanh duong dan Windows sai
-# (da gap loi nay 1 lan khi viet script). Vi vay phai tu chuyen $OUT_DIR sang dang Windows
-# that (qua cygpath) TRUOC, roi dat MSYS_NO_PATHCONV=1 de container-path duoc giu nguyen.
-OUT_DIR_WIN="$(cygpath -w "$OUT_DIR")"
-MSYS_NO_PATHCONV=1 docker run --rm -v "$STORAGE_VOLUME:/data:ro" -v "$OUT_DIR_WIN:/backup" \
-  alpine tar czf /backup/storage.tar.gz -C /data .
+echo "==> Archiving storage volume"
+ARCHIVE_CID="$(docker create -v "$STORAGE_VOLUME:/data:ro" alpine sh -c 'tar czf /tmp/storage.tar.gz -C /data .')"
+cleanup_archive() { docker rm -f "$ARCHIVE_CID" >/dev/null 2>&1 || true; }
+trap 'cleanup_archive; restore_writers' EXIT
+docker start -a "$ARCHIVE_CID" >/dev/null
+docker cp "$ARCHIVE_CID:/tmp/storage.tar.gz" "$OUT_DIR/storage.tar.gz"
+cleanup_archive
+trap restore_writers EXIT
 
-DB_SIZE=$(du -h "$OUT_DIR/db.dump" | cut -f1)
-STORAGE_SIZE=$(du -h "$OUT_DIR/storage.tar.gz" | cut -f1)
-echo "==> Xong. db.dump=$DB_SIZE storage.tar.gz=$STORAGE_SIZE"
-echo "==> Luu y: script nay CHUA tu xoa ban cu (retention) - don thu cong hoac them logic"
-echo "    xoa thu muc cu hon N ngay neu dung cho lich chay tu dong dai han."
+if command -v sha256sum >/dev/null; then
+  sha256sum "$OUT_DIR/db.dump" "$OUT_DIR/storage.tar.gz" > "$OUT_DIR/SHA256SUMS"
+else
+  shasum -a 256 "$OUT_DIR/db.dump" "$OUT_DIR/storage.tar.gz" > "$OUT_DIR/SHA256SUMS"
+fi
+cat > "$OUT_DIR/manifest.txt" <<EOF
+format=misa-flipbook-docker-backup-v2
+created_at_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+postgres_db=$POSTGRES_DB
+storage_volume=$STORAGE_VOLUME
+quiesced_services=${RUNNING_WRITERS[*]:-none}
+EOF
+
+echo "==> Backup complete: $OUT_DIR"
+echo "==> Verify SHA256SUMS and use restore.sh only against a maintenance/test stack."
