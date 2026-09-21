@@ -112,6 +112,19 @@ trình đọc, và nút copy mã nhúng `<iframe>` vào menu chia sẻ. Đã ki�
 trang 1/trang cuối" bằng đo thời gian 150ms/lần ở cả 2 khổ màn hình — kết luận là độ trễ hiệu
 ứng lật (~450-600ms), không phải lỗi kẹt vĩnh viễn; không hồi quy 109/109 test cũ.
 
+**Phản hồi audit codex 21/09/2026 — Đợt 1 (SEC-01/02/03, UI-01) — ĐÃ XONG (2026-09-21)**,
+xem chi tiết đầy đủ ở MEMORYBANK.md: sửa cache header lộ nội dung protected qua shared
+cache (SEC-01), suspend tenant/thu hồi membership chưa có hiệu lực ngay (SEC-02, kèm quyết
+định người dùng: suspend chỉ chặn Dashboard, không chặn public reader), thiếu throttle
+đăng nhập + khóa mật khẩu sách theo toàn cục thay vì theo nguồn (SEC-03, thêm hạ tầng
+Redis rate-limit mới), và lỗi owner mở sách Private bị vỡ ảnh do FE không cập nhật
+accessToken khi retry (UI-01). Đã kiểm chứng thật: 96/96 test tích hợp cũ + mới (P1/P2/P3/
+F16/P5/sec_audit mới) đều PASS trên Docker thật, cộng kiểm chứng UI-01 qua Claude Browser
+thật. Thêm P3/F16/P5/sec_audit vào CI (QA-01). Còn lại PDF-01/02, JOB-01, PERF-01, PDF-03,
+PUB-01, FEAT-01/DATA-01, UX-01/URL-01, OPS-01, ADM-01, EDGE-01 cho Đợt 2/3/4 theo
+REMEDIATION.md — quy mô lớn hơn nhiều (process isolation, streaming upload, lease/fencing,
+windowed reader), không gộp chung 1 lượt.
+
 **P4 — F10 Mức A (hyperlink URL ngoài + link nội bộ sang trang) — ĐÃ XONG (2026-09-17)**,
 xem chi tiết ở MEMORYBANK.md: backend đã có sẵn phần trích xuất link từ trước (P0), việc làm
 thêm là resolve `/Dest` (link nội bộ) ra số trang cụ thể (`services/pdf-worker/app/convert.py`)

@@ -33,6 +33,7 @@ import { UpdateBookDto } from "./dto/update-book.dto";
 import { UpdateBookSettingsDto } from "./dto/update-book-settings.dto";
 import { randomSuffix8, slugifyVietnamese } from "./util/slugify";
 import { buildReaderPages } from "./util/build-reader-pages";
+import { RateLimitService } from "../../common/rate-limit/rate-limit.service";
 
 const PDF_SIGNATURE = Buffer.from("%PDF-");
 const PDF_MAX_BYTES = Number(process.env.PDF_MAX_BYTES ?? 200 * 1024 * 1024);
@@ -77,7 +78,10 @@ const BOOK_SELECT_COLUMNS = `
 @UseInterceptors(DbContextInterceptor)
 @RequireTenant()
 export class BooksController {
-  constructor(@Inject(STORAGE_ADAPTER) private readonly storage: StorageAdapter) {}
+  constructor(
+    @Inject(STORAGE_ADAPTER) private readonly storage: StorageAdapter,
+    private readonly rateLimit: RateLimitService
+  ) {}
 
   @Get()
   async list(@Req() req: AuthedRequest) {
@@ -507,6 +511,14 @@ export class BooksController {
         gaIdProvided,
       ]
     );
+    // SEC-03: doi/xoa mat khau phai "xoa het khoa cu" cho MOI dia chi tung bi khoa tren
+    // sach nay - khong lam vay thi chinh chu so huu se tu khoa minh khoi sach cua ho
+    // (khoa cu theo IP con hieu luc toi 15 phut du mat khau da doi, phat hien qua
+    // p3_e2e.test.js chay that). Giu nguyen ky vong cu cua book_settings.failed_attempts/
+    // locked_until (reset ve 0 moi khi access_epoch tang, xem CASE WHEN $6 o tren).
+    if (bumpEpoch) {
+      await this.rateLimit.resetByPrefix(`bookpw:${bookId}:`);
+    }
     return rows[0];
   }
 }

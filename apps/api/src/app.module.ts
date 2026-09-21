@@ -1,5 +1,6 @@
 import { Module } from "@nestjs/common";
 import { DbModule } from "./common/db/db.module";
+import { RateLimitModule } from "./common/rate-limit/rate-limit.module";
 import { StorageModule } from "./storage/storage.module";
 import { AuthModule } from "./modules/auth/auth.module";
 import { MeModule } from "./modules/me/me.module";
@@ -12,6 +13,7 @@ import { PublicModule } from "./modules/public/public.module";
 @Module({
   imports: [
     DbModule,
+    RateLimitModule,
     StorageModule,
     AuthModule,
     MeModule,

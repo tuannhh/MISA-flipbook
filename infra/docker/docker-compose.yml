@@ -59,10 +59,15 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
       migrate:
         condition: service_completed_successfully
     environment:
       DATABASE_URL: postgres://app_user:${APP_DB_PASSWORD}@postgres:5432/${POSTGRES_DB:-misa_flipbook}
+      # SEC-03: rate limit dang nhap/mat khau sach (xem common/rate-limit) - dung chung
+      # instance Redis voi dispatcher/worker-convert, khong them ha tang moi.
+      REDIS_URL: redis://redis:6379
       JWT_SECRET: ${JWT_SECRET:?can dat JWT_SECRET trong .env}
       JWT_EXPIRES_IN_SECONDS: ${JWT_EXPIRES_IN_SECONDS:-28800}
       STORAGE_ROOT: /data/storage

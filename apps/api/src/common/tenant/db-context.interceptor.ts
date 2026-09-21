@@ -75,6 +75,18 @@ export class DbContextInterceptor implements NestInterceptor {
         }
         await client.query("SELECT set_config('app.tenant_id', $1, true)", [tenantId]);
         if (!isAdmin) {
+          // SEC-02 (audit codex 21/09/2026): truoc day chi kiem tra membership active,
+          // KHONG kiem tra tenants.status - mot tenant bi Admin suspend van cho Creator
+          // GET/PATCH sach binh thuong (evidence: 200/200). Quyet dinh voi nguoi dung
+          // (2026-09-21): suspend CHI chan Dashboard/API quan tri cua Creator, KHONG
+          // chan public reader (/public/books/*) - sach da publish van doc duoc binh
+          // thuong de khong lam gian doan nguoi doc cuoi cua tenant. Admin van duoc
+          // truy cap tenant suspended (vd de ho tro/xem xet), nen check nay chi ap
+          // dung khi !isAdmin, giong membership check ben duoi.
+          const tenant = await client.query("SELECT status FROM tenants WHERE id = $1", [tenantId]);
+          if (tenant.rowCount === 0 || tenant.rows[0].status !== "active") {
+            throw new ForbiddenException("Tenant nay dang bi tam khoa.");
+          }
           const membership = await client.query(
             "SELECT 1 FROM memberships WHERE tenant_id = $1 AND user_id = $2 AND status = 'active'",
             [tenantId, jwtUserId]

@@ -97,6 +97,14 @@ export function PublicBookReader({ permalink, embed = false }: { permalink: stri
               // xem logic tuong ung o public-books.controller.ts (resolveActor).
               const loginToken = !triedLoginToken ? getToken() : null;
               if (loginToken && loginToken !== token) {
+                // UI-01 (audit codex 21/09/2026): phai cap nhat luon accessToken sang
+                // loginToken o day - neu khong, manifest tai duoc bang loginToken nhung
+                // FlipBook van dung accessToken cu (null/rong) de gan vao URL anh/nen/tai
+                // xuong -> toan bo anh 403 du manifest da 200 (owner mo sach Private cua
+                // chinh minh nhung 12/12 anh loi). Xem getAuthorizedBook trong
+                // public-books.controller.ts: cung mot token phai dung cho ca manifest
+                // lan asset.
+                setAccessToken(loginToken);
                 load(loginToken, true);
                 return;
               }

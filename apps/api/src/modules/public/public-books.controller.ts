@@ -25,6 +25,7 @@ import { STORAGE_ADAPTER, StorageAdapter } from "../../storage/storage.interface
 import { buildReaderPages } from "../books/util/build-reader-pages";
 import { VerifyBookPasswordDto } from "./dto/verify-book-password.dto";
 import { RecordBookEventDto } from "./dto/record-book-event.dto";
+import { RateLimitService } from "../../common/rate-limit/rate-limit.service";
 
 const BOOK_ACCESS_TOKEN_TYP = "book_access";
 const BOOK_ACCESS_TOKEN_TTL_SECONDS = Number(process.env.BOOK_ACCESS_TOKEN_TTL_SECONDS ?? 12 * 60 * 60);
@@ -100,7 +101,8 @@ export class PublicBooksController {
   constructor(
     @Inject(DB_POOL) private readonly pool: Pool,
     @Inject(STORAGE_ADAPTER) private readonly storage: StorageAdapter,
-    private readonly jwtService: JwtService
+    private readonly jwtService: JwtService,
+    private readonly rateLimit: RateLimitService
   ) {}
 
   private parsePermalink(permalink: string): { slug: string; suffix: string } {
@@ -161,11 +163,31 @@ export class PublicBooksController {
     return rows[0];
   }
 
+  /**
+   * SEC-02 (audit codex 21/09/2026): "la owner" truoc day chi so sanh users.id, khong
+   * xet memberships.status trong dung tenant cua sach - Creator bi Admin thu hoi
+   * membership (disable) van doc duoc sach Private cua minh vi tai khoan (users.status)
+   * van active. Owner phai co CA users.status active LAN membership active trong tenant
+   * cua sach; mat 1 trong 2 dieu kien la mat quyen owner ngay o request ke tiep (khong
+   * doi JWT het han - dung nguyen tac "revoke phai co hieu luc ngay" trong REMEDIATION.md).
+   * Khong kiem tra tenants.status o day: theo quyet dinh voi nguoi dung (2026-09-21),
+   * suspend tenant chi chan Dashboard/API quan tri (xem DbContextInterceptor), khong
+   * chan public reader - sach da publish cua tenant suspended van doc duoc binh thuong.
+   */
+  private async isActiveOwner(actor: Actor | null, book: PublicBookRow): Promise<boolean> {
+    if (actor === null || actor.userId !== book.owner_id) return false;
+    const { rows } = await this.pool.query<{ status: string | null }>(
+      "SELECT public_lookup_membership_status($1,$2) AS status",
+      [book.tenant_id, actor.userId]
+    );
+    return rows.length > 0 && rows[0].status === "active";
+  }
+
   /** Tra ve sach da publish, da xac nhan quyen xem (F16 Private > F05 mat khau > cong khai). */
   private async getAuthorizedBook(permalink: string, token: string | undefined): Promise<PublicBookRow> {
     const book = await this.findPublishedBook(permalink);
     const actor = await this.resolveActor(token);
-    const isOwner = actor !== null && actor.userId === book.owner_id;
+    const isOwner = await this.isActiveOwner(actor, book);
 
     if (book.visibility === "private") {
       if (!isOwner && !actor?.isAdmin) {
@@ -199,6 +221,24 @@ export class PublicBooksController {
     return book;
   }
 
+  /**
+   * SEC-01 (audit codex 21/09/2026): sach co mat khau/Private van la "protected
+   * content" - KHONG duoc de shared/browser cache giu lai response, du header
+   * Cache-Control cu lap luan rang assetId la UUID ngau nhien nen "an toan". UUID
+   * kho doan khong phai la authorization: API van nhan Bearer token/`?token=` cho
+   * cung URL, nen mot proxy cache dat truoc API co the phuc vu lai byte cua nguoi
+   * co quyen cho nguoi khac gui đúng URL (khong kem token) sau khi mat khau/quyen
+   * bi doi. Sach cong khai thuc su (khong mat khau, khong Private) van duoc cache
+   * binh thuong de giu hieu nang.
+   */
+  private isProtectedBook(book: PublicBookRow): boolean {
+    return book.visibility === "private" || !!book.password_hash;
+  }
+
+  private setCacheHeader(res: Response, book: PublicBookRow, publicCacheControl: string): void {
+    res.setHeader("Cache-Control", this.isProtectedBook(book) ? "private, no-store" : publicCacheControl);
+  }
+
   /** F12: ghi 1 event 'open'/'page_view' qua ham SECURITY DEFINER (route nay khong co
    * DbContextInterceptor nen khong the INSERT truc tiep qua RLS thuong). Loi ghi nhan
    * KHONG BAO GIO duoc lam hong luong doc sach chinh - chi log, nuot loi. */
@@ -219,9 +259,11 @@ export class PublicBooksController {
   async getBook(
     @Param("permalink") permalink: string,
     @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
     @Query("token") tokenQuery?: string
   ) {
     const book = await this.getAuthorizedBook(permalink, this.extractToken(req, tokenQuery));
+    this.setCacheHeader(res, book, "public, max-age=60");
     const manifest = JSON.parse((await this.storage.readBuffer(book.manifest_key)).toString("utf8"));
     const assetsRes = await this.pool.query("SELECT * FROM public_list_page_assets($1,$2)", [
       book.book_id,
@@ -252,7 +294,7 @@ export class PublicBooksController {
       throw new NotFoundException("Sach nay khong co anh nen.");
     }
     res.setHeader("Content-Type", book.background_content_type ?? "application/octet-stream");
-    res.setHeader("Cache-Control", "public, max-age=3600");
+    this.setCacheHeader(res, book, "public, max-age=3600");
     return new StreamableFile(this.storage.createReadStream(book.background_object_key));
   }
 
@@ -273,10 +315,9 @@ export class PublicBooksController {
       throw new NotFoundException("Khong tim thay anh.");
     }
     res.setHeader("Content-Type", rows[0].content_type);
-    // Anh trang chi phu thuoc revision (bat bien sau khi sinh), khong phu thuoc mat
-    // khau/quyen doc - cache cong khai an toan ke ca voi sach co password vi assetId
-    // la UUID ngau nhien, khong doan duoc tu permalink.
-    res.setHeader("Cache-Control", "public, max-age=3600, immutable");
+    // Anh trang bat bien theo revision, nhung "kho doan URL" khong phai la authorization
+    // (xem isProtectedBook) - chi cache cong khai/immutable khi sach thuc su cong khai.
+    this.setCacheHeader(res, book, "public, max-age=3600, immutable");
     return new StreamableFile(this.storage.createReadStream(rows[0].object_key));
   }
 
@@ -303,6 +344,7 @@ export class PublicBooksController {
     }
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `attachment; filename="${rows[0].file_name_hint}"`);
+    this.setCacheHeader(res, book, "public, max-age=3600");
     return new StreamableFile(this.storage.createReadStream(rows[0].object_key));
   }
 
@@ -321,46 +363,57 @@ export class PublicBooksController {
     return { ok: true };
   }
 
-  /** F05: nhap mat khau -> tra ve "book access token" (JWT ngan han) neu dung. */
+  /**
+   * F05 + SEC-03 (audit codex 21/09/2026): nhap mat khau -> tra ve "book access token"
+   * (JWT ngan han) neu dung.
+   *
+   * Truoc day khoa theo book_settings.locked_until (1 bo dem CHUNG cho ca sach) - mot
+   * nguon nhap sai 8 lan khoa CA nguoi khac dang nhap dung mat khau tren cung sach
+   * (evidence EVIDENCE.md: "8 password sai... 429; nhap dung tiep theo cung 429").
+   * Chuyen sang khoa theo (book_id, ip) qua RateLimitService (Redis, atomic) - mot
+   * nguon bi khoa khong anh huong nguon khac. Check truoc ca argon2.verify de tranh
+   * ton chi phi hash khi da biet chac se tu choi (REMEDIATION.md muc 3).
+   * public_record_password_attempt (DB) van duoc goi de giu thong ke tong hop cho
+   * Admin sau nay, KHONG con dung ket qua cua no de quyet dinh chan/cho.
+   */
   @Post(":permalink/verify-password")
-  async verifyPassword(@Param("permalink") permalink: string, @Body() dto: VerifyBookPasswordDto) {
+  async verifyPassword(
+    @Param("permalink") permalink: string,
+    @Body() dto: VerifyBookPasswordDto,
+    @Req() req: Request
+  ) {
     const book = await this.findPublishedBook(permalink);
     if (!book.password_hash) {
       throw new BadRequestException("Sach nay khong dat mat khau.");
     }
-    if (book.locked_until && new Date(book.locked_until).getTime() > Date.now()) {
-      const retryAfterSeconds = Math.ceil((new Date(book.locked_until).getTime() - Date.now()) / 1000);
+
+    const rlKey = `bookpw:${book.book_id}:${req.ip}`;
+    const rl = await this.rateLimit.consume(rlKey, PASSWORD_MAX_ATTEMPTS, PASSWORD_LOCK_MINUTES * 60);
+    if (!rl.allowed) {
       throw new HttpException(
         {
           statusCode: HttpStatus.TOO_MANY_REQUESTS,
-          message: `Da nhap sai qua nhieu lan. Thu lai sau khoang ${Math.ceil(retryAfterSeconds / 60)} phut.`,
-          retryAfterSeconds,
+          message: `Da nhap sai qua nhieu lan. Thu lai sau khoang ${Math.ceil(rl.retryAfterSeconds / 60)} phut.`,
+          retryAfterSeconds: rl.retryAfterSeconds,
         },
         HttpStatus.TOO_MANY_REQUESTS
       );
     }
 
     const ok = await argon2.verify(book.password_hash, dto.password).catch(() => false);
-    const { rows: attemptRows } = await this.pool.query(
-      "SELECT * FROM public_record_password_attempt($1,$2,$3,$4)",
-      [book.book_id, ok, PASSWORD_MAX_ATTEMPTS, PASSWORD_LOCK_MINUTES]
-    );
-    const attempt = attemptRows[0];
+    await this.pool
+      .query("SELECT public_record_password_attempt($1,$2,$3,$4)", [
+        book.book_id,
+        ok,
+        PASSWORD_MAX_ATTEMPTS,
+        PASSWORD_LOCK_MINUTES,
+      ])
+      .catch(() => undefined);
 
     if (!ok) {
-      if (attempt.locked_until) {
-        throw new HttpException(
-          {
-            statusCode: HttpStatus.TOO_MANY_REQUESTS,
-            message: `Sai mat khau qua nhieu lan. Da khoa tam thoi ${PASSWORD_LOCK_MINUTES} phut.`,
-            retryAfterSeconds: PASSWORD_LOCK_MINUTES * 60,
-          },
-          HttpStatus.TOO_MANY_REQUESTS
-        );
-      }
-      const remaining = Math.max(0, PASSWORD_MAX_ATTEMPTS - attempt.failed_attempts);
-      throw new UnauthorizedException(`Sai mat khau. Con toi da ${remaining} lan thu truoc khi bi khoa tam thoi.`);
+      throw new UnauthorizedException(`Sai mat khau. Con toi da ${rl.remaining} lan thu tu dia chi nay.`);
     }
+    await this.rateLimit.reset(rlKey);
 
     const accessToken = await this.jwtService.signAsync(
       { typ: BOOK_ACCESS_TOKEN_TYP, bookId: book.book_id, accessEpoch: book.access_epoch } satisfies BookAccessTokenPayload,

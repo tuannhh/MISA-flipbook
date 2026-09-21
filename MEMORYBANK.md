@@ -1474,6 +1474,153 @@ trên: màn đăng nhập, dashboard (header xanh), reader công khai. Đọc tr
 `<textarea>` mã nhúng trên trang chi tiết sách xác nhận đúng chuỗi mới, không còn
 `max-width:900px`/`4:3`. Không hồi quy: chạy lại 6 bộ test tích hợp, 109/109 PASS.
 
+## Phản hồi audit codex 21/09/2026 — Đợt 1: SEC-01/02/03 + UI-01 (2026-09-21)
+
+Bối cảnh: codex đã audit read-only bản HEAD `b3d1077` (đối chiếu PLAN/ARCHITECTURE/
+MEMORYBANK/HANDOFF, chạy thật Docker local), lưu bộ bàn giao tại
+`C:\Users\A04-0035\Documents\Codex\2026-09-16\to\outputs\misa-flipbook-audit-20260921\`
+(README.md, AUDIT.md — 18 finding SEC/PDF/JOB/PERF/UI/PUB/FEAT/DATA/UX/URL/OPS/QA/ADM/EDGE,
+REMEDIATION.md — phương án + tiêu chí nghiệm thu, EVIDENCE.md — bằng chứng tái hiện trực
+tiếp qua HTTP/DB/UI, CLAUDE-REVIEW.md — nội dung trao đổi trực tiếp). Người dùng yêu cầu:
+đọc kỹ, chỗ nào công nhận thì sửa trước rồi mới phản hồi codex, chỗ nào có lý thì debate
+bằng bằng chứng, không tự bốc phét số liệu.
+
+**Đánh giá chung**: sau khi đọc đủ 4 tài liệu + đối chiếu source hiện tại, hầu hết finding
+P1 đều có bằng chứng tái hiện trực tiếp (HTTP status, số liệu cụ thể, không phải suy diễn)
+và đã được xác nhận ĐÚNG khi đọc lại code — không có finding nào ở Đợt 1 cần debate/phản
+bác. Ưu tiên sửa hết Đợt 1 (SEC-01/02/03, UI-01) trước, các finding còn lại (PDF-01/02,
+JOB-01, PERF-01, PDF-03, PUB-01, FEAT-01, DATA-01, UX-01/URL-01, OPS-01, ADM-01, EDGE-01)
+để Đợt 2 — quy mô mỗi việc đủ lớn (process isolation PDFium, streaming upload, lease/fencing
+completion, windowed image loading) để không gộp chung 1 lượt sửa như REMEDIATION.md cũng
+khuyến nghị ("Không nên gộp toàn bộ vào một PR").
+
+### UI-01 — [FlipBook.tsx](apps/web/src/components/FlipBook.tsx)/[PublicBookReader.tsx](apps/web/src/components/PublicBookReader.tsx): owner mở sách Private, manifest 200 nhưng 12/12 ảnh lỗi
+Xác nhận đúng: `load()` khi retry bằng `loginToken` (F16, owner/admin qua permalink cũ)
+chỉ set `book` chứ KHÔNG set lại `accessToken` state — `imageUrl`/`backgroundUrl`/
+`downloadUrl` vẫn dùng `accessToken` cũ (null/rỗng) nên mọi request ảnh thiếu `?token=`,
+bị 403. Sửa: `setAccessToken(loginToken)` ngay khi retry thành công.
+**Kiểm chứng thật qua Claude Browser** (không chỉ đọc code): đăng nhập admin@misa.local,
+mở `/read/sec-02-private-a77420b8-rtwl6lyp` (sách Private) — `read_network_requests` xác
+nhận toàn bộ request `.../assets/<id>?token=<jwt>` trả 200 OK, ảnh hiển thị đầy đủ 5 trang
+(screenshot). Trước fix, theo evidence của audit là 12/12 ảnh lỗi (`private-reader-owner.png`).
+
+### SEC-01 — [public-books.controller.ts](apps/api/src/modules/public/public-books.controller.ts): Cache-Control public/immutable trên nội dung được bảo vệ
+Xác nhận đúng: `getAsset`/`getBackground`/`download`/manifest luôn `public, max-age=...`
+(có nơi `immutable`) bất kể sách có mật khẩu/Private hay không — UUID assetId khó đoán
+KHÔNG phải authorization, và API vẫn nhận `?token=`/Bearer trên cùng URL, nên shared/proxy
+cache phía trước có thể trả lại byte của người có quyền cho người khác dùng đúng URL
+(không kèm token) sau khi mật khẩu/quyền đã đổi.
+Sửa: thêm `isProtectedBook()` (visibility='private' HOẶC có password_hash) +
+`setCacheHeader()` — sách được bảo vệ luôn `private, no-store` (asset/background/download/
+manifest); sách công khai thật (không mật khẩu, không Private) giữ nguyên
+`public, max-age=3600, immutable` để không đổi hiệu năng cho trường hợp không cần bảo vệ.
+
+### SEC-02 — [db-context.interceptor.ts](apps/api/src/common/tenant/db-context.interceptor.ts) + [public-books.controller.ts](apps/api/src/modules/public/public-books.controller.ts): suspend tenant / revoke membership không có hiệu lực ngay
+Xác nhận đúng (2 lỗi độc lập):
+1. `DbContextInterceptor` chỉ kiểm tra `memberships.status='active'`, KHÔNG kiểm tra
+   `tenants.status` — tenant bị Admin suspend, Creator vẫn GET/PATCH sách 200 bình thường.
+2. `resolveActor()` (route public) chỉ tra `users.status` qua `auth_lookup_user_by_id`,
+   không tra `memberships.status` — Creator bị Admin thu hồi membership (disable) trong
+   1 tenant vẫn được coi là "owner" (đọc được sách Private của mình) vì JWT cũ chưa hết hạn.
+
+**Quyết định với người dùng (2026-09-21, AskUserQuestion, chọn Phương án 1)**: suspend
+tenant CHỈ chặn Dashboard/API quản trị của Creator (GET/PATCH sách, upload, publish...),
+KHÔNG chặn public reader — sách đã publish của tenant bị suspend vẫn đọc được bình thường
+cho khách hàng cuối, tránh làm gián đoạn nội dung đã nhúng/chia sẻ ra ngoài chỉ vì lý do
+hành chính (vd trễ thanh toán). Người dùng nêu rõ lý do chọn: hiện mới triển khai nội bộ
+MISA nhưng cần phòng ngừa trước cho việc sau này triển khai cho đối tác khác của MISA —
+suspend không nên vô tình đánh sập link khách hàng cuối đang dùng.
+
+Sửa:
+- `db-context.interceptor.ts`: thêm check `tenants.status='active'` (chỉ khi `!isAdmin`,
+  cùng vị trí/logic với check membership sẵn có — Admin vẫn truy cập được tenant suspended
+  để hỗ trợ/xem xét).
+- Migration `0013_public_membership_lookup.sql`: hàm SECURITY DEFINER mới
+  `public_lookup_membership_status(tenant_id, user_id)` (route public không có
+  `app.tenant_id`/`app.user_id` nên không tự SELECT `memberships` qua RLS được).
+- `public-books.controller.ts`: `isActiveOwner()` thay cho so sánh `userId` đơn thuần —
+  owner giờ phải vừa `users.status='active'` vừa `memberships.status='active'` trong đúng
+  tenant của sách; áp dụng thống nhất cho cả nhánh Private VÀ nhánh bypass mật khẩu F05
+  (trước đây 2 nhánh tự tính `isOwner` riêng, dễ lệch nhau khi sửa 1 chỗ quên chỗ kia).
+
+### SEC-03 — [auth.controller.ts](apps/api/src/modules/auth/auth.controller.ts) + [public-books.controller.ts](apps/api/src/modules/public/public-books.controller.ts): không throttle đăng nhập, khóa mật khẩu sách theo toàn cục
+Xác nhận đúng: `/auth/login` không giới hạn số lần thử (10 lần sai liên tiếp vẫn 10×401,
+không 429). `public_record_password_attempt` (0007) là SELECT rồi UPDATE riêng — không có
+row lock giữa 2 bước, có thể mất lần tăng khi đồng thời (race). Khóa mật khẩu theo
+`book_settings.failed_attempts`/`locked_until` là **1 bộ đếm CHUNG cho cả sách** — 1 nguồn
+(1 trình duyệt) nhập sai 8 lần khóa LUÔN cả người khác đang nhập đúng mật khẩu trên cùng
+sách (DoS thật, không phải lý thuyết).
+
+Sửa — thêm hạ tầng mới `apps/api/src/common/rate-limit/` (Global module, dùng `ioredis`
+6.0.0 — cùng bản với dispatcher/worker-convert, cùng instance Redis trong compose, không
+thêm hạ tầng mới):
+- `RateLimitService.consume(key, max, windowSeconds)`: `INCR` + `PEXPIRE` nguyên tử qua 1
+  Lua script (loại bỏ hoàn toàn race đọc-rồi-tăng). **Fail-open** nếu Redis lỗi/timeout —
+  quyết định có chủ đích: throttle là lớp phòng ngự bổ sung, không được biến Redis thành
+  single point of failure làm sập đăng nhập/xem sách có mật khẩu khi Redis tạm ngưng.
+- `/auth/login`: khóa theo `(ip, email)` — 1 IP thử credential-stuffing nhiều email vẫn bị
+  chặn theo từng email, đồng thời không khóa oan người khác dùng chung IP/NAT khi họ đăng
+  nhập đúng email của mình. Chưa có reverse proxy trước API (xem docker-compose.yml) nên
+  CHƯA bật `trust proxy` — `req.ip` là địa chỉ TCP thật, client không tự giả được qua
+  X-Forwarded-For. **Việc cần làm khi thêm proxy thật ở giai đoạn sau**: cấu hình
+  `trust proxy` đúng số hop/IP allowlist của proxy đó trước khi tin lại header này.
+- `verifyPassword`: khóa theo `(book_id, ip)` thay vì chỉ `book_id` — check TRƯỚC cả
+  `argon2.verify` (tiết kiệm chi phí hash khi đã chắc chắn từ chối, theo đúng đề xuất mục
+  3 của REMEDIATION.md). `public_record_password_attempt` (migration
+  `0014_password_attempt_atomic.sql`) viết lại thành 1 câu `UPDATE` nguyên tử duy nhất
+  (không còn `plpgsql` SELECT-rồi-UPDATE) — vẫn giữ để ghi thống kê cho Admin sau này,
+  KHÔNG còn dùng kết quả của nó để chặn/cho (chuyển hẳn sang Redis).
+- **Lỗi phát hiện qua chạy test thật, không phải suy đoán trước**: đổi mật khẩu/xóa mật
+  khẩu (bump `access_epoch`) phải xóa hết khóa Redis liên quan tới sách đó — nếu không,
+  chính chủ sở hữu tự khóa mình khỏi sách của họ tới 15 phút dù đã đặt mật khẩu mới (hành
+  vi cũ của `book_settings.failed_attempts`/`locked_until` luôn reset về 0 khi đổi mật
+  khẩu — xem `books.controller.ts` `putSettings`). Thêm `RateLimitService.resetByPrefix()`
+  (SCAN + DEL, không dùng `KEYS` để tránh block Redis dùng chung), gọi khi `bumpEpoch` true.
+  Phát hiện: `p3_e2e.test.js` FAIL đúng ca "đổi mật khẩu mới → tải PDF với token mới" sau
+  khi thêm rate limit — sửa xong chạy lại pass 33/33.
+- Off-by-one: `PASSWORD_MAX_ATTEMPTS=8` nghĩa là lần thử thứ 8 CHÍNH NÓ phải bị khóa (hành
+  vi gốc: `failed_attempts >= max` được tính trong cùng lần cập nhật đẩy số đếm lên 8) —
+  không phải lần thứ 9. Sửa điều kiện `allowed` từ `count <= max` thành `count < max`.
+  Phát hiện qua `p3_e2e.test.js` FAIL cụ thể ("lần cuối phải 429, thực tế 401"), không tự
+  suy luận trước khi chạy test.
+
+### Kiểm chứng thật (không tự công bố số liệu)
+Rebuild + restart container `api`/`web`, áp dụng 2 migration mới trên Docker Compose đang
+chạy thật (không phải môi trường giả lập). Chạy lại TOÀN BỘ 6 bộ test tích hợp hiện có +
+1 bộ test mới, tất cả trên stack Docker thật:
+- `api_e2e.test.js` (P1): 14/14 PASS — không hồi quy.
+- `p2_e2e.test.js` (P2): 16/16 PASS — không hồi quy.
+- `p3_e2e.test.js` (P3, mật khẩu/F11 download): 33/33 PASS (2 FAIL ban đầu do 2 lỗi nêu
+  trên, đã sửa và chạy lại pass).
+- `f16_visibility.test.js` (Private/F16): 12/12 PASS — không hồi quy.
+- `p5_uat.test.js` (P5 UAT): 21/21 PASS — không hồi quy.
+- `sec_audit_20260921.test.js` (MỚI — viết riêng cho đợt audit này, cover SEC-01/02/03):
+  14/14 PASS. Test dùng DB trực tiếp để dựng fixture "membership bị Admin thu hồi"/"tenant
+  suspended" (chưa có endpoint API riêng cho việc này, giống cách audit đã làm — xem
+  EVIDENCE.md "Quyền fixture được dựng qua DB"). **Giới hạn đã ghi rõ, không giấu**: SEC-03
+  chỉ kiểm chứng khóa theo (ip,email)/(book,ip) bằng 1 khóa duy nhất (không mô phỏng được
+  nhiều IP thật từ 1 máy test) — kiểm chứng đầy đủ đa-IP/proxy cache thật cần môi trường
+  proxy riêng như chính EVIDENCE.md cũng nêu, để Đợt 2/khi có reverse proxy thật.
+- UI-01: kiểm chứng qua Claude Browser thật (không chỉ code), xem mục UI-01 ở trên.
+
+QA-01 (CI chưa chạy P3/F16/P5) cũng được sửa nhân tiện: thêm 4 step vào
+`.github/workflows/ci.yml` (P3, F16, P5, sec_audit mới) — trước đây CI chỉ chạy
+tenant_isolation + P1 + P2.
+
+### Còn lại cho Đợt 2 (chưa sửa trong lượt này)
+PDF-01 (PDFium không thread-safe, cần process isolation), PDF-02 (upload buffer 200MB +
+transaction dài + chưa có budget trang/pixel/deadline), JOB-01 (finalizeSuccess không
+idempotent, finalizeFailure có thể ghi đè ready→failed), PERF-01 (FlipBook tải hết ảnh
+ngay, chưa windowed loading), PDF-03 (rotation/CropBox lệch tọa độ hyperlink), PUB-01
+(asset không ghim theo revision, publish không có optimistic concurrency), FEAT-01/DATA-01
+(thumbnail chưa 16:9 chuẩn, OG luôn dùng trang đầu, SSR metadata tăng nhầm lượt "open"),
+UX-01/URL-01 (touch target 32px, thiếu page-jump/thumbnail strip, URL builder chưa chuẩn
+hóa), OPS-01 (backup.sh phụ thuộc `cygpath`, không có snapshot boundary nhất quán), ADM-01
+(Admin list LIMIT 500 cứng), EDGE-01 (retry unique-slug trong transaction đã abort — lỗi
+25P02; revision number không serialize per-book). Đây đều là việc quy mô lớn hơn 1 lượt
+(REMEDIATION.md tự ước lượng "vài tuần" cho toàn bộ) — sẽ làm theo Đợt 2/3/4 của
+REMEDIATION.md, không gộp chung vì rủi ro review/rollback.
+
 ## Cách cập nhật
 Sau mỗi đợt công việc, ghi: đã đổi gì, quyết định/giả định mới, test nào thực sự chạy, kết quả/lỗi, commit và bước kế tiếp.
 Giữ lịch sử ADR nếu thay quyết định, đánh dấu superseded thay vì xóa.

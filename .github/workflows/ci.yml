@@ -88,6 +88,49 @@ jobs:
           JOB_TIMEOUT_MS: 60000
         run: node p2_e2e.test.js
 
+      # QA-01 (audit codex 21/09/2026): P3/F16 da co tu lau nhung chua tung chay trong
+      # CI - chi chay thu cong tren may dev, khong co bang chung tu dong hoa. Them vao
+      # day thay vi de rieng, tranh regression am tham nhu SEC-01/02/03 da phat hien.
+      - name: Run password protection / download e2e tests (P3)
+        working-directory: tests/integration
+        env:
+          API_BASE_URL: http://127.0.0.1:3000
+          SEED_ADMIN_EMAIL: admin@misa.local
+          SEED_ADMIN_PASSWORD: ChangeThisAdminPw123!
+          JOB_TIMEOUT_MS: 60000
+        run: node p3_e2e.test.js
+
+      - name: Run Publish/Private visibility e2e tests (F16)
+        working-directory: tests/integration
+        env:
+          API_BASE_URL: http://127.0.0.1:3000
+          DATABASE_URL: postgres://misa_admin:ci_pg_password_${{ github.run_id }}@127.0.0.1:5432/misa_flipbook
+          SEED_ADMIN_EMAIL: admin@misa.local
+          SEED_ADMIN_PASSWORD: ChangeThisAdminPw123!
+          JOB_TIMEOUT_MS: 60000
+        run: node f16_visibility.test.js
+
+      - name: Run UAT gap-fill e2e tests (P5)
+        working-directory: tests/integration
+        env:
+          API_BASE_URL: http://127.0.0.1:3000
+          SEED_ADMIN_EMAIL: admin@misa.local
+          SEED_ADMIN_PASSWORD: ChangeThisAdminPw123!
+          JOB_TIMEOUT_MS: 60000
+        run: node p5_uat.test.js
+
+      # SEC-01/SEC-02/SEC-03 (audit codex 21/09/2026): regression cho cac fix cache
+      # header/quyen truy cap/rate limit - xem sec_audit_20260921.test.js.
+      - name: Run security audit regression tests (SEC-01/02/03, codex 2026-09-21)
+        working-directory: tests/integration
+        env:
+          API_BASE_URL: http://127.0.0.1:3000
+          DATABASE_URL: postgres://misa_admin:ci_pg_password_${{ github.run_id }}@127.0.0.1:5432/misa_flipbook
+          SEED_ADMIN_EMAIL: admin@misa.local
+          SEED_ADMIN_PASSWORD: ChangeThisAdminPw123!
+          JOB_TIMEOUT_MS: 60000
+        run: node sec_audit_20260921.test.js
+
       - name: Dump logs on failure
         if: failure()
         working-directory: infra/docker
