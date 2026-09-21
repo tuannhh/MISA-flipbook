@@ -91,13 +91,32 @@ async function finalizeSuccess(ctx, outputKey, manifest) {
   const manifestKey = `${outputKey}/manifest.json`;
   const outputPath = path.join(STORAGE_ROOT, outputKey);
   const assets = [];
+  const seenObjectKeys = new Set();
   for (const page of manifest.pages) {
     for (const [variant, rel] of Object.entries(page.images)) {
       const full = path.resolve(outputPath, rel);
       if (!full.startsWith(outputPath + path.sep)) throw new Error("Invalid asset path");
       const stat = await fs.stat(full);
-      assets.push([variant === "thumb" ? "thumbnail" : "page_image", `${outputKey}/${rel}`,
+      const key = `${outputKey}/${rel}`;
+      if (seenObjectKeys.has(key)) throw new Error("Duplicate manifest asset");
+      seenObjectKeys.add(key);
+      assets.push([variant === "thumb" ? "thumbnail" : "page_image", key,
         rel.endsWith(".webp") ? "image/webp" : "image/jpeg", stat.size]);
+    }
+    for (const media of page.media ?? []) {
+      if (!media || typeof media.path !== "string" || typeof media.content_type !== "string") {
+        throw new Error("Invalid media manifest entry");
+      }
+      if (!new Set(["audio/mpeg", "audio/mp4", "audio/ogg", "audio/wav", "audio/webm", "video/mp4", "video/ogg", "video/webm"]).has(media.content_type)) {
+        throw new Error("Unsupported media content type");
+      }
+      const full = path.resolve(outputPath, media.path);
+      if (!full.startsWith(outputPath + path.sep)) throw new Error("Invalid media asset path");
+      const stat = await fs.stat(full);
+      const key = `${outputKey}/${media.path}`;
+      if (seenObjectKeys.has(key)) throw new Error("Duplicate manifest asset");
+      seenObjectKeys.add(key);
+      assets.push(["media", key, media.content_type, stat.size]);
     }
   }
   // Once present, the file is immutable, including duplicate completion calls.

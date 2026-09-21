@@ -173,6 +173,51 @@ export class PublicBooksController {
     res.setHeader("Cross-Origin-Resource-Policy", "same-site");
   }
 
+  private parseSingleByteRange(value: string | undefined, size: number): { start: number; end: number } | "invalid" | null {
+    if (!value) return null;
+    if (!value.startsWith("bytes=") || value.includes(",") || size < 1) return "invalid";
+    const match = /^bytes=(\d*)-(\d*)$/.exec(value);
+    if (!match || (!match[1] && !match[2])) return "invalid";
+    const [, startText, endText] = match;
+    if (!startText) {
+      const suffixLength = Number(endText);
+      if (!Number.isSafeInteger(suffixLength) || suffixLength < 1) return "invalid";
+      return { start: Math.max(0, size - suffixLength), end: size - 1 };
+    }
+    const start = Number(startText);
+    const requestedEnd = endText ? Number(endText) : size - 1;
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(requestedEnd) || start < 0 || start >= size || requestedEnd < start) {
+      return "invalid";
+    }
+    return { start, end: Math.min(requestedEnd, size - 1) };
+  }
+
+  private async streamWithRange(
+    req: Request,
+    res: Response,
+    objectKey: string,
+    contentType: string
+  ): Promise<StreamableFile | { statusCode: number; message: string }> {
+    const size = await this.storage.getSize(objectKey);
+    const range = this.parseSingleByteRange(req.headers.range, size);
+    res.setHeader("Accept-Ranges", "bytes");
+    res.setHeader("Content-Type", contentType);
+    if (range === "invalid") {
+      res.status(HttpStatus.REQUESTED_RANGE_NOT_SATISFIABLE);
+      res.setHeader("Content-Range", `bytes */${size}`);
+      return { statusCode: HttpStatus.REQUESTED_RANGE_NOT_SATISFIABLE, message: "Byte range khong hop le." };
+    }
+    if (range) {
+      const length = range.end - range.start + 1;
+      res.status(HttpStatus.PARTIAL_CONTENT);
+      res.setHeader("Content-Range", `bytes ${range.start}-${range.end}/${size}`);
+      res.setHeader("Content-Length", String(length));
+      return new StreamableFile(this.storage.createReadStream(objectKey, { start: range.start, end: range.end }));
+    }
+    res.setHeader("Content-Length", String(size));
+    return new StreamableFile(this.storage.createReadStream(objectKey));
+  }
+
   private async issueReadGrant(book: PublicBookRow, scope: ReaderScope, actorUserId?: string): Promise<ReadGrant> {
     const revisionId = book.published_revision_id;
     const manifestKey = await this.getReadyRevision(book, revisionId);
@@ -345,10 +390,9 @@ export class PublicBooksController {
       grant.revisionId,
       assetId,
     ]);
-    if (!rows[0]) throw new NotFoundException("Khong tim thay anh.");
-    res.setHeader("Content-Type", rows[0].content_type);
+    if (!rows[0]) throw new NotFoundException("Khong tim thay tai nguyen cua sach.");
     this.setResponseHeaders(res, grant.book);
-    return new StreamableFile(this.storage.createReadStream(rows[0].object_key));
+    return this.streamWithRange(req, res, rows[0].object_key, rows[0].content_type);
   }
 
   @Get(":permalink/download")
@@ -365,10 +409,9 @@ export class PublicBooksController {
       grant.revisionId,
     ]);
     if (!rows[0]) throw new ForbiddenException("Sach nay khong cho phep tai xuong PDF goc.");
-    res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `attachment; filename="${rows[0].file_name_hint}"`);
     this.setResponseHeaders(res, grant.book);
-    return new StreamableFile(this.storage.createReadStream(rows[0].object_key));
+    return this.streamWithRange(req, res, rows[0].object_key, "application/pdf");
   }
 
   @Post(":permalink/events")

@@ -71,19 +71,29 @@ function computeImageBox(ownAspect: number, containerAspect: number) {
 
 interface PageProps {
   imageUrl: string | null;
+  assetUrl: (assetId: string) => string;
   rotation?: number;
   alt: string;
   widthPt: number;
   heightPt: number;
   pageAspect: number;
   links?: ReaderPage["links"];
+  media?: ReaderPage["media"];
+  active?: boolean;
   onGoToPage?: (pageNumber: number) => void;
 }
 
 const Page = forwardRef<HTMLDivElement, PageProps>(function Page(
-  { imageUrl, rotation = 0, alt, widthPt, heightPt, pageAspect, links, onGoToPage },
+  { imageUrl, assetUrl, rotation = 0, alt, widthPt, heightPt, pageAspect, links, media, active = false, onGoToPage },
   ref
 ) {
+  const mediaRefs = useRef<Array<HTMLMediaElement | null>>([]);
+  // PageFlip keeps some hidden page nodes mounted. Media must never continue
+  // playing after its page is no longer visible, and we never autoplay it.
+  useEffect(() => {
+    if (active) return;
+    mediaRefs.current.forEach((element) => element?.pause());
+  }, [active]);
   const rotated = rotation === 90 || rotation === 270;
   const ownAspect = rotated ? heightPt / widthPt : widthPt / heightPt;
   const box = computeImageBox(ownAspect, pageAspect);
@@ -99,6 +109,54 @@ const Page = forwardRef<HTMLDivElement, PageProps>(function Page(
       ) : (
         <div className="flipbook-blank" aria-hidden />
       )}
+      {media?.map((item, i) => {
+        if (!item.mediaAssetId) return null;
+        const [x0, y0, x1, y1] = item.rectNorm;
+        const style = {
+          left: `${(box.left + x0 * box.width) * 100}%`,
+          top: `${(box.top + y0 * box.height) * 100}%`,
+          width: `${(x1 - x0) * box.width * 100}%`,
+          height: `${(y1 - y0) * box.height * 100}%`,
+        };
+        const stopPageFlip = (event: ReactPointerEvent<HTMLElement>) => event.stopPropagation();
+        const source = assetUrl(item.mediaAssetId);
+        return (
+          <div
+            key={`media-${i}`}
+            className={`flipbook-media-overlay is-${item.kind}`}
+            style={style}
+            onPointerDown={stopPageFlip}
+            onClick={(event) => event.stopPropagation()}
+          >
+            {item.kind === "audio" ? (
+              <audio
+                ref={(element) => {
+                  mediaRefs.current[i] = element;
+                }}
+                controls
+                controlsList="nodownload"
+                preload="none"
+                aria-label="Audio trong PDF"
+              >
+                <source src={source} type={item.contentType} />
+              </audio>
+            ) : (
+              <video
+                ref={(element) => {
+                  mediaRefs.current[i] = element;
+                }}
+                controls
+                controlsList="nodownload"
+                playsInline
+                preload="none"
+                aria-label="Video trong PDF"
+              >
+                <source src={source} type={item.contentType} />
+              </video>
+            )}
+          </div>
+        );
+      })}
       {links?.map((link, i) => {
         // internal_goto chua resolve duoc so trang (target=null) hoac unsupported_action
         // (Muc C, PLAN.md) - khong render vung bam, khong the hien loi cho nguoi doc.
@@ -658,11 +716,14 @@ export function FlipBook({
                 <Page
                   key={p.page}
                   imageUrl={pageImg(p, index)}
+                  assetUrl={imageUrl}
                   rotation={p.rotation}
                   widthPt={p.widthPt}
                   heightPt={p.heightPt}
                   pageAspect={pageAspect}
                   links={p.links}
+                  media={p.media}
+                  active={index === currentIndex || (isSpreadCapable && index === currentIndex + 1)}
                   onGoToPage={goToPage}
                   alt={t("pageLabelSingle", { page: p.page, total: pages.length })}
                 />

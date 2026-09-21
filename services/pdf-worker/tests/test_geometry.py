@@ -10,8 +10,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from PIL import Image
+from pypdf import PdfWriter
+from pypdf.generic import ArrayObject, DecodedStreamObject, DictionaryObject, NameObject, NumberObject, TextStringObject
 
-from app.convert import _normalize_rect, _safe_external_uri, convert_share_thumbnail
+from app.convert import _extract_links, _normalize_rect, _safe_external_uri, convert_share_thumbnail
 
 
 class AnnotationGeometryTests(unittest.TestCase):
@@ -61,6 +63,65 @@ class AnnotationGeometryTests(unittest.TestCase):
             with Image.open(output) as cover:
                 self.assertEqual(cover.size, (1200, 675))
 
+    def _write_movie_pdf(self, output: Path, payload: bytes, filename: str = "clip.mp4"):
+        """Build a small standard /Movie annotation with an embedded FileSpec."""
+        writer = PdfWriter()
+        page = writer.add_blank_page(width=200, height=100)
+        stream = DecodedStreamObject()
+        stream.set_data(payload)
+        stream[NameObject("/Type")] = NameObject("/EmbeddedFile")
+        stream[NameObject("/Subtype")] = NameObject("/video#2Fmp4")
+        stream_ref = writer._add_object(stream)
+        file_spec = DictionaryObject(
+            {
+                NameObject("/Type"): NameObject("/Filespec"),
+                NameObject("/F"): TextStringObject(filename),
+                NameObject("/EF"): DictionaryObject({NameObject("/F"): stream_ref}),
+            }
+        )
+        movie = DictionaryObject({NameObject("/F"): writer._add_object(file_spec)})
+        annotation = DictionaryObject(
+            {
+                NameObject("/Type"): NameObject("/Annot"),
+                NameObject("/Subtype"): NameObject("/Movie"),
+                NameObject("/Rect"): ArrayObject([NumberObject(20), NumberObject(10), NumberObject(180), NumberObject(90)]),
+                NameObject("/Movie"): writer._add_object(movie),
+            }
+        )
+        page[NameObject("/Annots")] = ArrayObject([writer._add_object(annotation)])
+        with output.open("wb") as handle:
+            writer.write(handle)
+
+    def test_extracts_only_magic_checked_embedded_movie_as_media_overlay(self):
+        # A minimal ftyp header proves extractor/asset routing; browser playback is
+        # covered separately with a real media fixture in the integration suite.
+        payload = b"\x00\x00\x00\x18ftypisom\x00\x00\x02\x00isomiso2avc1mp41"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "movie.pdf"
+            output = root / "output"
+            self._write_movie_pdf(source, payload)
+            warnings: list[str] = []
+            pages = _extract_links(source, None, output, warnings)
+            self.assertEqual(warnings, [])
+            self.assertEqual(len(pages[0]["media"]), 1)
+            media = pages[0]["media"][0]
+            self.assertEqual(media["kind"], "video")
+            self.assertEqual(media["content_type"], "video/mp4")
+            self.assert_rect(media["rect_norm"], [0.1, 0.1, 0.9, 0.9])
+            self.assertEqual((output / media["path"]).read_bytes(), payload)
+
+    def test_rejects_disguised_embedded_file_even_when_pdf_declares_video(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "disguised.pdf"
+            output = root / "output"
+            self._write_movie_pdf(source, b"MZ-not-browser-media", filename="danger.mp4")
+            warnings: list[str] = []
+            pages = _extract_links(source, None, output, warnings)
+            self.assertEqual(pages[0]["media"], [])
+            self.assertEqual(len(warnings), 1)
+            self.assertFalse((output / "media").exists())
 
 if __name__ == "__main__":
     unittest.main()

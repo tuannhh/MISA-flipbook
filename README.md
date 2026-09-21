@@ -36,10 +36,11 @@ PostgreSQL/Redis chỉ bind loopback để chẩn đoán trên máy Docker. Mặ
 ## Hiện đã có / giới hạn trước stable
 
 Đã có: ứng dụng multi-tenant, Docker Compose, pipeline PDF, reader, publish/rollback, mật khẩu,
-download, share/embed, analytics, storage accounting, CI và candidate handoff. Các kiểm chứng Docker
-cô lập gần nhất được ghi tại `handoffs/HF-20260921-04.md` sau khi commit tương ứng được tạo.
+download, share/embed, analytics, storage accounting, CI, cùng baseline media PDF nhúng an toàn.
+Các kiểm chứng Docker cô lập gần nhất được ghi tại `handoffs/HF-20260921-04.md` cho candidate hiện
+hành; handoff kế tiếp sẽ ghi riêng bằng chứng media sau khi source revision được tạo.
 
 Chưa có stable tag hay điểm rollback production: người dùng cần xác nhận candidate cụ thể theo
 `HANDOFF.md`; sau đó mới tạo annotated tag, ghi image digest và backup/restore reference. Audio/video
-từ PDF vẫn chờ PDF mẫu thật cùng policy; device matrix, CDN/object-storage/HA và topology TLS của MISA
-cũng cần được xác minh trước production.
+PDF đã có baseline chỉ nhận embedded media allowlist; video của corpus MISA, device matrix,
+CDN/object-storage/HA và topology TLS của MISA vẫn cần được xác minh trước production.

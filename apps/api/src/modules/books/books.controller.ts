@@ -247,8 +247,8 @@ export class BooksController {
     const revision = await this.resolvePreviewRevision(req, bookId, revisionId);
     const manifest = JSON.parse((await this.storage.readBuffer(revision.manifest_key)).toString("utf8"));
     const assetsRes = await req.dbClient.query(
-      `SELECT id, kind, object_key FROM assets
-       WHERE book_id = $1 AND revision_id = $2 AND kind IN ('page_image','thumbnail')
+      `SELECT id, kind, object_key, content_type FROM assets
+       WHERE book_id = $1 AND revision_id = $2 AND kind IN ('page_image','thumbnail','media')
        ORDER BY object_key`,
       [bookId, revision.id]
     );
@@ -288,7 +288,7 @@ export class BooksController {
   ) {
     const { rows } = await req.dbClient.query(
       `SELECT object_key, content_type FROM assets
-       WHERE id = $1 AND book_id = $2 AND kind IN ('page_image','thumbnail','share_thumbnail')`,
+       WHERE id = $1 AND book_id = $2 AND kind IN ('page_image','thumbnail','share_thumbnail','media')`,
       [assetId, bookId]
     );
     if (rows.length === 0) {

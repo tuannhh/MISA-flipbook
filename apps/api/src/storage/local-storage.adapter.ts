@@ -48,8 +48,12 @@ export class LocalStorageAdapter implements StorageAdapter {
     await fs.promises.rm(this.resolveSafe(objectKey), { force: true });
   }
 
-  createReadStream(objectKey: string): fs.ReadStream {
-    return fs.createReadStream(this.resolveSafe(objectKey));
+  createReadStream(objectKey: string, options?: { start?: number; end?: number }): fs.ReadStream {
+    return fs.createReadStream(this.resolveSafe(objectKey), options);
+  }
+
+  async getSize(objectKey: string): Promise<number> {
+    return (await fs.promises.stat(this.resolveSafe(objectKey))).size;
   }
 
   getAbsolutePath(objectKey: string): string {

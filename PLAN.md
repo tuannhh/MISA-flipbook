@@ -66,10 +66,9 @@ Thumbnail master luôn 16:9; nếu mạng xã hội crop, chỉ tạo biến th�
 
 ## 6. PDF có tương tác
 Mức A bắt buộc v1: hyperlink HTTP/HTTPS, mailto được kiểm tra; liên kết tới trang nội bộ đúng cả trang xoay/crop và chế độ hai trang.
-Mức B có cổng kiểm chứng: annotation audio/video có stream hoặc URL mà parser trích xuất được và trình duyệt phát được. Trích tọa độ thành overlay HTML; phát sau thao tác người dùng; pause khi rời trang.
-Mức C không chạy: PDF JavaScript, Launch action, Flash/3D hoặc action tùy ý. Báo cáo rõ từng đối tượng bị bỏ qua. Không coi file đính kèm là media tự phát nếu không có thông tin vị trí/annotation hợp lệ.
-
-Cần PDF mẫu thật có hyperlink, audio và video để chốt phạm vi hỗ trợ. Nếu PoC không giữ được loại media người dùng cần, phải nêu lựa chọn thay parser/SDK hoặc bổ sung media thủ công và cập nhật phạm vi trước khi nghiệm thu; không tự đánh dấu F10 hoàn tất.
+Mức B có cổng kiểm chứng. Hiện worker chỉ nhận media **nhúng thật trong PDF** tại annotation `/Movie`, `/Screen` có `/Rendition`, hoặc `/RichMedia` Assets. Chỉ stream `/EF` nằm trong file được đọc; tuyệt đối không theo URL, đường dẫn local hay file đính kèm không có annotation/toạ độ. Payload được nhận dạng bằng chữ ký byte, không tin tên file hay metadata; allowlist là WAV, MP3, Ogg, WebM và MP4. Mỗi media tối đa 20 MiB, tổng một PDF tối đa 50 MiB (cấu hình qua biến môi trường). Mục bị bỏ qua xuất hiện dưới dạng cảnh báo conversion, không làm hỏng cả sách.
+Media hợp lệ được trích toạ độ thành overlay HTML, chỉ tải khi người đọc bấm control (`preload=none`), không autoplay và pause khi rời trang. Asset media dùng cùng reader grant, revision pin, password/Private và cache policy như ảnh trang; HTTP byte range phục vụ seek trên browser/mobile. Nút download của browser chỉ là trải nghiệm giao diện, không phải DRM.
+Mức C không chạy: PDF JavaScript, Launch action, Flash/3D, action tùy ý và media external. Báo cáo rõ từng đối tượng bị bỏ qua. Cần PDF MISA thật có audio **và video** để xác nhận codec/container của corpus và chốt F10 đầy đủ; fixture WAV chỉ chứng minh baseline kỹ thuật, không thay thế UAT corpus.
 
 ## 7. Giới hạn và giả định pilot
 Giới hạn đề xuất để benchmark: 200 MB/PDF, 500 trang/PDF, 20 Creator, 100 phiên đọc đồng thời, 1–2 job chuyển đổi đồng thời. Đây là dữ liệu lập kế hoạch, không phải năng lực đã đo.

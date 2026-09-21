@@ -25,7 +25,7 @@ Upload → kiểm tra file/quota → lưu source private → tạo revision + jo
 - Worker không có outbound network mặc định, không chạy JavaScript PDF, non-root, giới hạn CPU/RAM/thời gian/dung lượng scratch.
 - Chuyển từng trang, không giữ toàn bộ bitmap trong RAM; tạo thumbnail và ảnh nhiều kích thước. WebP + JPEG fallback; ảnh chất lượng cao tải theo zoom.
 - Link/text/media có tọa độ chuẩn hóa sau CropBox/rotation, cùng hệ tọa độ với bitmap.
-- PDF có media URL không được server tự fetch tùy ý; nếu cần fetch/transcode ở giai đoạn sau phải có allowlist, kiểm tra IP/redirect chống SSRF và job riêng.
+- PDF media chỉ nhận byte ở `/EF` nhúng trong annotation `/Movie`, `/Screen` Rendition hoặc `/RichMedia`; magic-byte allowlist WAV/MP3/Ogg/WebM/MP4, tối đa 20 MiB/object và 50 MiB/PDF. URL/path ngoài PDF không được server tự fetch. Nếu cần fetch/transcode ở giai đoạn sau phải có allowlist, kiểm tra IP/redirect chống SSRF và job riêng.
 - Ghi lỗi và cảnh báo theo trang/đối tượng; giới hạn số retry; worker chết không publish dữ liệu dở.
 - Derivative path chứa tenant/book/revision, không dùng tên file người dùng để tạo đường dẫn filesystem.
 - Có kiểm soát quota tổng cả source, ảnh, media và bản cũ; cleanup chỉ thu gom dữ liệu không còn được giữ bởi revision/backup/handoff.
@@ -69,6 +69,7 @@ Rollback nội dung bằng đổi pointer về revision ready cũ; không phục
 ## 6. Reader và hiệu năng
 Ưu tiên tải trang đang đọc, prefetch 1–2 trang kề, hủy request không cần, giải phóng ảnh xa, giới hạn texture/DPR trên máy yếu. HTML text layer nếu trích xuất được giúp chọn text và accessibility; OCR chưa bao gồm.
 Reader ở embed hoặc mobile có fallback nút trước/sau. Không autoplay audio/video. Với iframe cross-site bị chặn cookie, cho mở reader top-level để nhập mật khẩu hoặc thiết kế grant ngắn hạn trong bộ nhớ; không đưa mật khẩu vào snippet iframe.
+Media asset được cấp reader grant ngắn hạn theo book/revision, không lộ object key trong manifest và hỗ trợ single HTTP byte range cho seek. Khi password/visibility đổi, access epoch vô hiệu grant cũ trước khi stream.
 Dashboard và reader tách bundle; reader không tải thư viện editor. Metadata public server-rendered; asset nội dung qua đường kiểm soát quyền.
 
 Mục tiêu tạm cho PDF benchmark 100 trang/20 MB sau xử lý: trang đầu p75 ≤3 giây trên profile 4G định nghĩa tại PoC; chuyển trang đã prefetch p95 ≤300 ms; không crash qua 100 lần lật trên máy mobile mục tiêu. Hiệu ứng mất bao lâu phải đo riêng với thời gian tải ảnh. Chốt SLO sau khi đo, không xem số này là kết quả.

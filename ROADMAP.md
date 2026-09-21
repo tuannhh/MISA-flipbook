@@ -141,10 +141,13 @@ ngoài + link nội bộ về trang cuối), không hồi quy 88/88 test cũ. F1
 báo cáo rõ là bỏ qua, không tự chạy. F06 (GA4), F12 (dashboard Creator), F13 (dashboard
 Admin) của P4 chưa làm — đang làm tiếp theo thứ tự đó.
 
-**P4 — F10 Mức B (audio/video) — TẠM HOÃN theo quyết định người dùng (2026-09-17)**: đã hỏi
-trực tiếp vì thiếu PDF mẫu thật có audio/video (điều kiện bắt buộc của PLAN.md trước khi coi
-Mức B là xong) — người dùng chọn "tạm hoãn Mức B, tập trung F06/F12/F13 trước". Không tự tạo
-file mẫu giả để "cho xong việc". Quay lại khi có file mẫu thật hoặc người dùng yêu cầu tiếp.
+**P4 — F10 Mức B (audio/video, cập nhật 2026-09-21)**: quyết định tạm hoãn 17/09 vì thiếu PDF
+MISA thật vẫn được giữ trong lịch sử, nhưng baseline an toàn đã được triển khai và kiểm chứng bằng
+WAV nhúng thật: `/Movie`, `/Screen` Rendition và `/RichMedia` chỉ được lấy từ `/EF` nội bộ, sniff
+magic byte, allowlist media browser, giới hạn 20 MiB/object và 50 MiB/PDF; URL/path ngoài PDF,
+JavaScript, Launch và Flash đều bị bỏ qua. Reader không autoplay, pause khi lật khỏi trang, và media
+đi qua đúng password/Private grant + HTTP Range. Chưa coi F10 hoàn tất cho đến khi UAT PDF MISA có
+cả audio/video, đặc biệt là codec video thực tế.
 
 **P4 — F06 (Google Analytics GA4) — ĐÃ XONG (2026-09-17)**, xem chi tiết ở MEMORYBANK.md:
 phát hiện 2 cột cần dùng (`book_settings.ga_id`, `tenants.default_ga_id`) đã có sẵn từ schema
@@ -191,9 +194,9 @@ tạm ngưng/kích hoạt lại 1 tenant và khóa/mở 1 tài khoản qua UI th
 trên, sửa, xác nhận lại thành công + audit log đúng), lọc job theo trạng thái, tìm kiếm
 sách, resize mobile 375×812 không vỡ layout — không hồi quy 88/88 test cũ.
 
-Đến đây P4 đã hoàn tất toàn bộ phạm vi ban đầu ("Hyperlink hoàn chỉnh, media trong phạm vi
-PoC, GA4, dashboard, Admin") trừ F10 Mức B (tạm hoãn, chờ file mẫu PDF thật có audio/video)
-và F10 Mức C (chủ động bỏ qua theo đúng PLAN.md, không tự nhận là đã làm).
+Đến đây P4 đã hoàn tất hyperlink, GA4, dashboard và Admin; F10 Mức B có baseline embedded-media
+an toàn nhưng vẫn chờ corpus PDF MISA audio/video để nghiệm thu codec thật; F10 Mức C chủ động bỏ
+qua theo đúng PLAN.md, không tự nhận là đã làm.
 
 **F13-rút gọn (2026-09-17)**: người dùng phản hồi Admin dashboard "phức tạp quá" (Admin dùng
 không phải dân kỹ thuật) — rút Tổng quan còn 2 số (Số sách đã đăng + Lượt mở), bỏ hẳn các

@@ -10,7 +10,9 @@ export interface StorageAdapter {
   /** Doc toan bo file (dung cho file nho nhu manifest.json). */
   readBuffer(objectKey: string): Promise<Buffer>;
   /** Stream file (dung cho anh trang/PDF khi tra ve HTTP response, tranh doc het vao RAM). */
-  createReadStream(objectKey: string): ReadStream;
+  createReadStream(objectKey: string, options?: { start?: number; end?: number }): ReadStream;
+  /** Size is required to implement HTTP byte ranges for audio/video and PDF download. */
+  getSize(objectKey: string): Promise<number>;
   /** Duong dan tuyet doi tren volume chia se, de dispatcher/pdf-worker doc lai file. */
   getAbsolutePath(objectKey: string): string;
 }

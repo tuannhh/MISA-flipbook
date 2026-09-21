@@ -67,6 +67,12 @@ export interface ReaderPage {
     target: string | number | null;
     rect_norm: number[];
   }>;
+  media: Array<{
+    kind: "audio" | "video";
+    contentType: string;
+    rectNorm: number[];
+    mediaAssetId: string | null;
+  }>;
   imageAssetId: string | null;
   thumbAssetId: string | null;
 }

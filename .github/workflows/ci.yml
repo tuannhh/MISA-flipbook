@@ -89,6 +89,15 @@ jobs:
           JOB_TIMEOUT_MS: 60000
         run: node p2_e2e.test.js
 
+      - name: Run embedded PDF media e2e (F10 level B)
+        working-directory: tests/integration
+        env:
+          API_BASE_URL: http://127.0.0.1:8080/api
+          SEED_ADMIN_EMAIL: admin@misa.local
+          SEED_ADMIN_PASSWORD: ChangeThisAdminPw123!
+          JOB_TIMEOUT_MS: 60000
+        run: node pdf_media_e2e.test.js
+
       # QA-01 (audit codex 21/09/2026): P3/F16 da co tu lau nhung chua tung chay trong
       # CI - chi chay thu cong tren may dev, khong co bang chung tu dong hoa. Them vao
       # day thay vi de rieng, tranh regression am tham nhu SEC-01/02/03 da phat hien.

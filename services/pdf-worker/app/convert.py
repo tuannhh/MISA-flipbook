@@ -34,6 +34,10 @@ MAX_SOURCE_BYTES = int(os.getenv("PDF_MAX_BYTES", "209715200"))
 SHARE_THUMBNAIL_WIDTH = 1200
 SHARE_THUMBNAIL_HEIGHT = 675
 MAX_SHARE_THUMBNAIL_PIXELS = int(os.getenv("SHARE_THUMBNAIL_MAX_PIXELS", "32000000"))
+# F10 level B: media is intentionally bounded independently of raster output. An
+# embedded video can be valid while still being far too large for a reader session.
+MAX_MEDIA_BYTES = int(os.getenv("PDF_MEDIA_MAX_BYTES", str(20 * 1024 * 1024)))
+MAX_MEDIA_TOTAL_BYTES = int(os.getenv("PDF_MEDIA_TOTAL_BYTES", str(50 * 1024 * 1024)))
 
 
 class ConversionError(Exception):
@@ -85,6 +89,7 @@ class PageManifest:
     rotation: int
     images: dict = field(default_factory=dict)
     links: list = field(default_factory=list)
+    media: list = field(default_factory=list)
 
 
 def _normalize_rect(rect, crop_box, rotation):
@@ -146,7 +151,182 @@ def _resolve_dest_page(reader: PdfReader, dest) -> int | None:
     return None if page_index is None else page_index + 1
 
 
-def _extract_links(pdf_path: pathlib.Path, password: str | None):
+def _deref(value):
+    """Dereference a pypdf indirect object without trusting its concrete class."""
+    return value.get_object() if hasattr(value, "get_object") else value
+
+
+def _pdf_name(value) -> str | None:
+    if value is None:
+        return None
+    # PDF names encode '/' as '#2F'. Decode only that constrained PDF escaping; this
+    # is metadata, never a path that is used directly on disk.
+    text = str(value).lstrip("/")
+    out: list[str] = []
+    pos = 0
+    while pos < len(text):
+        if text[pos] == "#" and pos + 2 < len(text):
+            try:
+                out.append(chr(int(text[pos + 1 : pos + 3], 16)))
+                pos += 3
+                continue
+            except ValueError:
+                pass
+        out.append(text[pos])
+        pos += 1
+    return "".join(out)
+
+
+def _file_spec_payload(file_spec):
+    """Return one embedded-file payload without following any external file path.
+
+    PDF FileSpec can also name a local path or URL. The worker must never dereference
+    either: doing so would turn an upload into a server-side file/network read. Only
+    the /EF stream already physically inside the uploaded PDF is eligible.
+    """
+    spec = _deref(file_spec)
+    if not hasattr(spec, "get"):
+        return None
+    embedded = _deref(spec.get("/EF"))
+    if not hasattr(embedded, "get"):
+        return None
+    stream = _deref(embedded.get("/UF") or embedded.get("/F"))
+    if stream is None or not hasattr(stream, "get_data"):
+        return None
+    try:
+        data = stream.get_data()
+    except (OSError, PdfReadError, ValueError):
+        return None
+    if not isinstance(data, bytes):
+        return None
+    file_name = str(spec.get("/UF") or spec.get("/F") or "media")
+    declared_type = _pdf_name(stream.get("/Subtype"))
+    return data, file_name, declared_type
+
+
+def _name_tree_file_specs(node):
+    """Yield FileSpecs stored in a RichMedia /Assets name tree."""
+    tree = _deref(node)
+    if not hasattr(tree, "get"):
+        return
+    names = _deref(tree.get("/Names"))
+    if isinstance(names, (list, tuple)):
+        # Name tree entries alternate display-name and FileSpec.
+        for index in range(1, len(names), 2):
+            yield names[index]
+    kids = _deref(tree.get("/Kids"))
+    if isinstance(kids, (list, tuple)):
+        for child in kids:
+            yield from _name_tree_file_specs(child)
+
+
+def _annotation_file_specs(annotation):
+    """Yield only embedded media FileSpecs from standard PDF media annotations.
+
+    Supports legacy Movie, Screen/Rendition and RichMedia asset containers. PDF
+    JavaScript, Launch actions, Flash and arbitrary URI actions are deliberately not
+    considered media; they remain unsupported per PLAN F10 level C.
+    """
+    subtype = str(annotation.get("/Subtype", ""))
+    if subtype == "/Movie":
+        movie = _deref(annotation.get("/Movie"))
+        if hasattr(movie, "get") and movie.get("/F") is not None:
+            yield movie.get("/F")
+        return
+
+    if subtype == "/Screen":
+        action = _deref(annotation.get("/A"))
+        if hasattr(action, "get") and action.get("/S") == "/Rendition":
+            rendition = _deref(action.get("/R"))
+            clip = _deref(rendition.get("/C")) if hasattr(rendition, "get") else None
+            media_data = _deref(clip.get("/D")) if hasattr(clip, "get") else None
+            if media_data is not None:
+                yield media_data
+        return
+
+    if subtype == "/RichMedia":
+        content = _deref(annotation.get("/RichMediaContent"))
+        assets = _deref(content.get("/Assets")) if hasattr(content, "get") else None
+        if assets is not None:
+            yield from _name_tree_file_specs(assets)
+
+
+def _classify_browser_media(data: bytes, file_name: str, declared_type: str | None):
+    """Return (audio|video, content-type, extension) after byte-level validation.
+
+    We do not rely on a PDF filename or /Subtype alone: both are attacker-controlled.
+    The allowlist is intentionally limited to native browser containers. A PDF with
+    Flash, executable media, or an exotic codec still renders as a book and records a
+    conversion warning instead of exposing a download or player.
+    """
+    if len(data) < 4:
+        return None
+    name = file_name.lower()
+    declared = (declared_type or "").lower()
+    if data.startswith(b"RIFF") and data[8:12] == b"WAVE":
+        return "audio", "audio/wav", "wav"
+    if data.startswith(b"ID3") or (len(data) >= 2 and data[0] == 0xFF and data[1] & 0xE0 == 0xE0):
+        return "audio", "audio/mpeg", "mp3"
+    if data.startswith(b"OggS"):
+        if declared.startswith("video/") or name.endswith((".ogv", ".oggv")):
+            return "video", "video/ogg", "ogv"
+        return "audio", "audio/ogg", "ogg"
+    if data.startswith(b"\x1aE\xdf\xa3"):
+        if declared.startswith("audio/") or name.endswith((".weba", ".webma")):
+            return "audio", "audio/webm", "webm"
+        return "video", "video/webm", "webm"
+    if len(data) >= 12 and data[4:8] == b"ftyp":
+        if declared.startswith("audio/") or name.endswith((".m4a", ".m4b", ".aac")):
+            return "audio", "audio/mp4", "m4a"
+        return "video", "video/mp4", "mp4"
+    return None
+
+
+def _extract_annotation_media(annotation, rect_norm, media_dir: pathlib.Path, page_number: int, ordinal: int, budget_left: int, warnings: list[str]):
+    """Extract safe embedded media for one page annotation and return manifest rows."""
+    if rect_norm is None:
+        return [], 0
+    extracted: list[dict] = []
+    used = 0
+    for file_spec in _annotation_file_specs(annotation):
+        payload = _file_spec_payload(file_spec)
+        if payload is None:
+            warnings.append(f"Trang {page_number}: bo qua media khong phai file nhung.")
+            continue
+        data, file_name, declared_type = payload
+        if len(data) > MAX_MEDIA_BYTES or len(data) > budget_left - used:
+            warnings.append(f"Trang {page_number}: bo qua media vuot gioi han dung luong.")
+            continue
+        classified = _classify_browser_media(data, file_name, declared_type)
+        if classified is None:
+            warnings.append(f"Trang {page_number}: bo qua media co dinh dang trinh duyet khong ho tro.")
+            continue
+        media_kind, content_type, extension = classified
+        item_number = ordinal + len(extracted) + 1
+        relative = f"media/page-{page_number:03d}-{item_number:03d}.{extension}"
+        target = media_dir.parent / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        # Each output directory is exclusive to one attempt. x prevents a malformed
+        # PDF from silently overwriting a previous annotation in that same attempt.
+        try:
+            with target.open("xb") as output:
+                output.write(data)
+        except FileExistsError:
+            warnings.append(f"Trang {page_number}: bo qua media trung ten trong PDF.")
+            continue
+        extracted.append(
+            {
+                "kind": media_kind,
+                "content_type": content_type,
+                "path": relative,
+                "rect_norm": rect_norm,
+            }
+        )
+        used += len(data)
+    return extracted, used
+
+
+def _extract_links(pdf_path: pathlib.Path, password: str | None, output_dir: pathlib.Path, warnings: list[str]):
     reader = PdfReader(str(pdf_path))
     if reader.is_encrypted:
         if password is None:
@@ -156,45 +336,68 @@ def _extract_links(pdf_path: pathlib.Path, password: str | None):
             raise ConversionError("needs_password", "Mat khau khong dung.")
 
     per_page = []
+    total_media_bytes = 0
+    media_dir = output_dir / "media"
     if len(reader.pages) > MAX_PAGES:
         raise ConversionError("page_limit", f"PDF vuot gioi han {MAX_PAGES} trang.")
-    for page in reader.pages:
+    for page_number, page in enumerate(reader.pages, start=1):
         rotation = int(page.get("/Rotate", 0)) % 360
         cropbox = page.cropbox
         crop_box = (float(cropbox.left), float(cropbox.bottom), float(cropbox.right), float(cropbox.top))
         links = []
+        media = []
         annots = page.get("/Annots")
         if annots:
             for a in annots:
                 obj = a.get_object()
-                if obj.get("/Subtype") != "/Link":
-                    continue
                 rect = [float(v) for v in obj.get("/Rect", [0, 0, 0, 0])]
                 rect_norm = _normalize_rect(rect, crop_box, rotation)
-                if rect_norm is None:
-                    continue
-                entry = {"rect_norm": rect_norm}
-                uri_action = obj.get("/A")
-                if uri_action and uri_action.get("/S") == "/URI":
-                    target = _safe_external_uri(uri_action.get("/URI"))
-                    entry["type"] = "external_uri" if target else "unsupported_action"
-                    entry["target"] = target
-                elif obj.get("/Dest") is not None or (
-                    uri_action and uri_action.get("/S") == "/GoTo"
-                ):
-                    dest = obj.get("/Dest")
-                    if dest is None and uri_action is not None:
-                        dest = uri_action.get("/D")
-                    entry["type"] = "internal_goto"
-                    try:
-                        entry["target"] = _resolve_dest_page(reader, dest)
-                    except (PdfReadError, KeyError, ValueError):
+                subtype = str(obj.get("/Subtype", ""))
+                if subtype == "/Link":
+                    if rect_norm is None:
+                        continue
+                    entry = {"rect_norm": rect_norm}
+                    uri_action = _deref(obj.get("/A"))
+                    if uri_action and uri_action.get("/S") == "/URI":
+                        target = _safe_external_uri(uri_action.get("/URI"))
+                        entry["type"] = "external_uri" if target else "unsupported_action"
+                        entry["target"] = target
+                    elif obj.get("/Dest") is not None or (
+                        uri_action and uri_action.get("/S") == "/GoTo"
+                    ):
+                        dest = obj.get("/Dest")
+                        if dest is None and uri_action is not None:
+                            dest = uri_action.get("/D")
+                        entry["type"] = "internal_goto"
+                        try:
+                            entry["target"] = _resolve_dest_page(reader, dest)
+                        except (PdfReadError, KeyError, ValueError):
+                            entry["target"] = None
+                    else:
+                        entry["type"] = "unsupported_action"
                         entry["target"] = None
-                else:
-                    entry["type"] = "unsupported_action"
-                    entry["target"] = None
-                links.append(entry)
-        per_page.append({"rotation": rotation, "width_pt": crop_box[2] - crop_box[0], "height_pt": crop_box[3] - crop_box[1], "links": links})
+                    links.append(entry)
+                elif subtype in {"/Movie", "/Screen", "/RichMedia"}:
+                    extracted, extracted_bytes = _extract_annotation_media(
+                        obj,
+                        rect_norm,
+                        media_dir,
+                        page_number,
+                        len(media),
+                        MAX_MEDIA_TOTAL_BYTES - total_media_bytes,
+                        warnings,
+                    )
+                    media.extend(extracted)
+                    total_media_bytes += extracted_bytes
+        per_page.append(
+            {
+                "rotation": rotation,
+                "width_pt": crop_box[2] - crop_box[0],
+                "height_pt": crop_box[3] - crop_box[1],
+                "links": links,
+                "media": media,
+            }
+        )
     return per_page
 
 
@@ -218,7 +421,7 @@ def convert_pdf(
 
     warnings: list[str] = []
     try:
-        link_info = _extract_links(source_path, password)
+        link_info = _extract_links(source_path, password, output_dir, warnings)
     except (PdfReadError, FileNotDecryptedError, ValueError) as exc:
         raise ConversionError("corrupted_or_invalid", "PDF hong hoac khong doc duoc.") from exc
 
@@ -282,6 +485,7 @@ def convert_pdf(
                 "rotation": 0,
                 "images": images,
                 "links": page_link_info.get("links", []),
+                "media": page_link_info.get("media", []),
             }
         )
     pdf.close()

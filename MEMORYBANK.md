@@ -1729,3 +1729,33 @@ tương ứng; không coi `1` là giá trị production mặc định.
 P1 14/14, P2 21/21, P3 35/35, security audit 14/14 và P5 21/21 đều gọi `http://127.0.0.1:13000/api`.
 Đây là candidate; vẫn chưa thay device matrix thật, PDF audio/video mẫu, CDN cache purge, TLS topology,
 object storage/HA hay stable acceptance. Hồ sơ candidate hiện hành: `handoffs/HF-20260921-04.md`.
+
+## Codex — baseline media PDF nhúng an toàn (21/09/2026)
+
+Đã tiếp tục phần F10 Mức B mà Claude chưa kịp làm, với phạm vi cố ý hẹp để không biến file PDF
+người dùng upload thành nguồn SSRF hay thực thi nội dung: worker chỉ xét annotation `/Movie`, `/Screen`
+với action `/Rendition`, và `/RichMedia` Assets. Mỗi đối tượng phải có `/EF` embedded stream ngay trong
+PDF; URL, local path, JavaScript, Launch, Flash/3D và arbitrary action bị bỏ qua. Không tin filename
+hoặc PDF `/Subtype`: byte được sniff và chỉ WAV, MP3, Ogg, WebM, MP4 được lưu. Giới hạn mặc định là
+20 MiB/object (`PDF_MEDIA_MAX_BYTES`) và 50 MiB/PDF (`PDF_MEDIA_TOTAL_BYTES`); file sai loại hoặc quá
+ngưỡng tạo warning theo trang, không làm publish asset nguy hiểm.
+
+Manifest chỉ đưa `mediaAssetId`, không đưa storage object key. `worker-convert` persist media như asset
+riêng và migration `0021_pdf_embedded_media.sql` mở đúng kind này cho reader RLS function. Reader render
+`audio`/`video` tại rect đã chuẩn hoá, `preload="none"`, không autoplay và pause khi trang không còn active.
+Media, image và PDF download cùng dùng read grant scope theo book/revision/password/Private. Endpoint asset
+và download hỗ trợ một HTTP byte range hợp lệ, trả 206/416 đúng header để browser seek mà không mở lỗ hổng
+qua direct storage URL.
+
+**Kiểm chứng thực tế:** Compose cô lập `misa-flipbook-codex-media` cold-start từ DB rỗng, migration
+0001–0021. Fixture `sample_embedded_audio.pdf` có WAV nhúng thật trong `/Movie`; converter unit 8/8,
+API và web production build pass. E2E qua public proxy `127.0.0.1:13000/api` đạt 15/15: upload → convert
+→ publish, manifest không lộ path, range `206` trả header RIFF đúng, không có reader grant trả 403 sau
+khi bật password, và suffix range qua grant password vẫn phát được. P5 regression 21/21 pass, gồm
+Range download PDF gốc. Reader được kiểm tra trực tiếp trong browser: 1 audio control có source scoped,
+`audio/wav`, `preload=none`, đúng một overlay.
+
+**Giới hạn còn mở trước stable:** chưa có PDF MISA thật có video hoặc đủ ma trận codec; `/Sound` raw PCM
+và media không nằm ở ba annotation trên chưa hỗ trợ; kiểm tra browser là desktop Docker, không thay device
+matrix cũ/mới/tablet. Không coi F10 hoàn tất hay candidate là stable cho đến khi corpus MISA và policy
+media được nghiệm thu. Handoff kế tiếp phải trỏ đến source revision sau khi commit thay đổi này.
