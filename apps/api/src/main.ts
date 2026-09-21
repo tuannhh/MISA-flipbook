@@ -6,7 +6,7 @@ import { AppModule } from "./app.module";
 function corsOrigins(): string[] | boolean {
   const raw = process.env.CORS_ORIGIN;
   if (!raw) return false; // mac dinh khong mo CORS neu khong khai bao ro
-  if (raw === "*") return true;
+  if (raw === "*") throw new Error("CORS_ORIGIN khong duoc la '*' khi Dashboard dung cookie HttpOnly.");
   return raw.split(",").map((s) => s.trim());
 }
 
@@ -20,15 +20,20 @@ function trustProxyHops(): number {
 }
 
 async function bootstrap() {
-  // FE (apps/web) la app rieng, goi qua HTTP thuan tuy (khong SSR-proxy, khong session
-  // chia se) - can CORS de trinh duyet cho phep goi tu domain khac. Dung Bearer token
-  // (khong cookie) nen khong can credentials: true.
+  // Dashboard uses an HttpOnly same-origin session cookie. If FE/API are split
+  // across origins, CORS_ORIGIN must enumerate only trusted origins; wildcard
+  // CORS is rejected because credentialed browser requests would be unsafe.
   // exposedHeaders: Content-Disposition khong nam trong danh sach header CORS "an toan"
   // mac dinh trinh duyet cho JS doc qua fetch() - can khai bao ro de FE (F11 tai xuong)
   // doc duoc ten file goi y neu can, du hien tai dung <a href download> (trinh duyet tu
   // ap dung header nay khi dieu huong, khong phu thuoc JS doc duoc hay khong).
   const app = await NestFactory.create(AppModule, {
-    cors: { origin: corsOrigins(), exposedHeaders: ["Content-Disposition"] },
+    cors: {
+      origin: corsOrigins(),
+      credentials: true,
+      allowedHeaders: ["Authorization", "Content-Type", "x-tenant-id", "x-csrf-token"],
+      exposedHeaders: ["Content-Disposition"],
+    },
   });
   // Docker pilot exposes API only through the bundled proxy. Trust exactly its
   // one hop so req.ip is the client address for abuse controls, while a direct

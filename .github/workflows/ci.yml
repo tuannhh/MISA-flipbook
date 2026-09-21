@@ -80,6 +80,15 @@ jobs:
           ADMIN_PASSWORD: ChangeThisAdminPw123!
         run: node api_e2e.test.js
 
+      - name: Run Dashboard cookie / CSRF / CORS regression
+        working-directory: tests/integration
+        env:
+          API_BASE_URL: http://127.0.0.1:8080
+          CORS_ORIGIN: http://localhost:8080
+          SEED_ADMIN_EMAIL: admin@misa.local
+          SEED_ADMIN_PASSWORD: ChangeThisAdminPw123!
+        run: node cookie_session_security.test.js
+
       - name: Run publish/preview/public-reader e2e tests (P2)
         working-directory: tests/integration
         env:

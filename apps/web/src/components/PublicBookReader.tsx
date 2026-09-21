@@ -2,7 +2,7 @@
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { apiFetch, ApiError, assetUrl } from "@/lib/api";
-import { getToken } from "@/lib/auth";
+
 import { canonicalReaderUrl } from "@/lib/public-reader-url";
 import type { PublicBook } from "@/lib/types";
 import { FlipBook } from "@/components/FlipBook";
@@ -101,11 +101,11 @@ export function PublicBookReader({ permalink, embed = false, initialPage }: { pe
               // Sach dang Private (F16): thu lai 1 lan bang JWT dang nhap thuong (neu co
               // va chua thu) de nguoi la owner/admin van xem duoc qua chinh permalink nay -
               // xem logic tuong ung o public-books.controller.ts (resolveActor).
-              const loginToken = !triedLoginToken ? getToken() : null;
-              if (loginToken && loginToken !== token) {
-                // The API exchanges this dashboard JWT for a limited reader token in
-                // its JSON response. Do not retain or append the login credential.
-                load(loginToken, true);
+              if (!triedLoginToken) {
+                // Browser credentials include the HttpOnly Dashboard cookie. The
+                // API exchanges it for a limited reader token; no dashboard JWT is
+                // read from or appended by frontend code.
+                load(null, true);
                 return;
               }
               setPrivateBlocked(true);

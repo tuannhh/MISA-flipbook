@@ -27,6 +27,7 @@ import { STORAGE_ADAPTER, StorageAdapter } from "../../storage/storage.interface
 import { buildReaderPages } from "../books/util/build-reader-pages";
 import { RecordBookEventDto } from "./dto/record-book-event.dto";
 import { VerifyBookPasswordDto } from "./dto/verify-book-password.dto";
+import { DASHBOARD_SESSION_COOKIE, readCookie } from "../../common/auth/session-cookie";
 
 const BOOK_ACCESS_TOKEN_TYP = "book_access";
 const BOOK_ACCESS_TOKEN_TTL_SECONDS = Number(process.env.BOOK_ACCESS_TOKEN_TTL_SECONDS ?? 4 * 60 * 60);
@@ -112,7 +113,9 @@ export class PublicBooksController {
   private extractToken(req: Request, queryToken?: string): string | undefined {
     const header = req.headers.authorization;
     if (header?.startsWith("Bearer ")) return header.slice("Bearer ".length);
-    return queryToken || undefined;
+    // Query tokens are scoped reader grants, therefore they take precedence over
+    // a Dashboard cookie when a password reader also happens to be logged in.
+    return queryToken || readCookie(req, DASHBOARD_SESSION_COOKIE);
   }
 
   private async findPublishedBook(permalink: string): Promise<PublicBookRow> {

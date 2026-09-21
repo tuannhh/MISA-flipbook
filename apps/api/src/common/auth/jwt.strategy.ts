@@ -2,6 +2,7 @@ import { Injectable } from "@nestjs/common";
 import { PassportStrategy } from "@nestjs/passport";
 import { ExtractJwt, Strategy } from "passport-jwt";
 import { JwtPayload } from "./jwt-payload.interface";
+import { DASHBOARD_SESSION_COOKIE, readCookie } from "./session-cookie";
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
@@ -11,7 +12,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       throw new Error("Thieu bien moi truong JWT_SECRET.");
     }
     super({
-      jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
+      jwtFromRequest: (req) => ExtractJwt.fromAuthHeaderAsBearerToken()(req) ?? readCookie(req, DASHBOARD_SESSION_COOKIE) ?? null,
       ignoreExpiration: false,
       secretOrKey: secret,
     });

@@ -1,8 +1,9 @@
-import { Body, Controller, HttpException, HttpStatus, Post, Req } from "@nestjs/common";
-import type { Request } from "express";
+import { Body, Controller, HttpException, HttpStatus, Post, Req, Res } from "@nestjs/common";
+import type { Request, Response } from "express";
 import { AuthService } from "./auth.service";
 import { LoginDto } from "./dto/login.dto";
 import { rateLimitKeyPart, RateLimitService } from "../../common/rate-limit/rate-limit.service";
+import { clearBrowserSession, issueBrowserSession } from "../../common/auth/session-cookie";
 
 const LOGIN_MAX_ATTEMPTS = Number(process.env.LOGIN_MAX_ATTEMPTS ?? 10);
 const LOGIN_IP_MAX_ATTEMPTS = Number(process.env.LOGIN_IP_MAX_ATTEMPTS ?? 30);
@@ -27,7 +28,7 @@ export class AuthController {
    * dung topology da chot (direct API = 0); khong duoc bat trust proxy tuy y.
    */
   @Post("login")
-  async login(@Body() dto: LoginDto, @Req() req: Request): Promise<{ accessToken: string }> {
+  async login(@Body() dto: LoginDto, @Req() req: Request, @Res({ passthrough: true }) res: Response): Promise<{ accessToken: string }> {
     const email = dto.email.trim().toLowerCase();
     const sourceKey = `login-ip:${rateLimitKeyPart(`source:${req.ip}`)}`;
     const accountKey = `login-account:${rateLimitKeyPart(`account:${req.ip}:${email}`)}`;
@@ -53,8 +54,19 @@ export class AuthController {
         HttpStatus.TOO_MANY_REQUESTS
       );
     }
-    const res = await this.authService.login(dto.email, dto.password);
+    const login = await this.authService.login(dto.email, dto.password);
     await Promise.all([this.rateLimit.reset(accountKey), this.rateLimit.reset(sourceKey)]);
-    return res;
+    issueBrowserSession(res, req, login.accessToken);
+    res.setHeader("Cache-Control", "private, no-store");
+    // Keep this response for API/CLI compatibility. The browser Dashboard ignores
+    // it and uses the HttpOnly cookie set above instead of persisting a JWT.
+    return login;
+  }
+
+  @Post("logout")
+  logout(@Req() req: Request, @Res({ passthrough: true }) res: Response): { ok: true } {
+    clearBrowserSession(res, req);
+    res.setHeader("Cache-Control", "private, no-store");
+    return { ok: true };
   }
 }
