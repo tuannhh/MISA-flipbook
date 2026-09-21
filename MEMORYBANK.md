@@ -1705,3 +1705,5 @@ PDF mẫu thật và policy media; test responsive hiện chưa thay cho ma tr�
 proxy/CDN/trust-proxy và cache purge phải kiểm chứng với topology do DevOps MISA chốt; local-volume
 collector không thay object-storage lifecycle/HA. Không gắn tag stable cho tới khi người dùng xác
 nhận candidate và các giới hạn chấp nhận được.
+Hồ sơ candidate hiện hành: `handoffs/HF-20260921-03.md` (runtime source
+`00e3af4ad3147ae913d6f0a79b4565dee0eb599c`).

@@ -289,3 +289,4 @@ rate-limit có command deadline 500ms, fallback per-process bị giới hạn b�
 chặn password spraying, và HMAC email/IP trước khi ghi key. Các kết quả thực tế và điều kiện chưa
 đủ để stable được lưu trong handoff candidate kế tiếp; vẫn cần device matrix thật, kiểm chứng
 proxy/CDN theo topology DevOps, PDF audio/video mẫu và object storage/HA trước production MISA.
+Hồ sơ candidate hiện hành: `handoffs/HF-20260921-03.md`; chưa gắn stable tag.
