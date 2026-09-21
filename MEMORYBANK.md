@@ -1705,7 +1705,7 @@ PDF mẫu thật và policy media; test responsive hiện chưa thay cho ma tr�
 proxy/CDN/trust-proxy và cache purge phải kiểm chứng với topology do DevOps MISA chốt; local-volume
 collector không thay object-storage lifecycle/HA. Không gắn tag stable cho tới khi người dùng xác
 nhận candidate và các giới hạn chấp nhận được.
-Hồ sơ candidate hiện hành: `handoffs/HF-20260921-03.md` (runtime source
+Hồ sơ candidate của đợt storage: `handoffs/HF-20260921-03.md` (runtime source
 `00e3af4ad3147ae913d6f0a79b4565dee0eb599c`).
 
 ## Codex — Docker public edge và trust-proxy (21/09/2026)
@@ -1728,4 +1728,4 @@ tương ứng; không coi `1` là giá trị production mặc định.
 `127.0.0.1:13000`; API/web chỉ có port nội bộ. HTTP web và `/health` trả 200. `proxy_security` 5/5,
 P1 14/14, P2 21/21, P3 35/35, security audit 14/14 và P5 21/21 đều gọi `http://127.0.0.1:13000/api`.
 Đây là candidate; vẫn chưa thay device matrix thật, PDF audio/video mẫu, CDN cache purge, TLS topology,
-object storage/HA hay stable acceptance. Hồ sơ handoff kế tiếp: `handoffs/HF-20260921-04.md`.
+object storage/HA hay stable acceptance. Hồ sơ candidate hiện hành: `handoffs/HF-20260921-04.md`.
