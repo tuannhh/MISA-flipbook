@@ -1672,3 +1672,36 @@ thật chứa audio/video, chưa có CDN/proxy production để xác minh purge/
 retention collector cho artifact attempt mồ côi hoặc accounting ảnh dẫn xuất, và chưa có
 object storage/HA production. Candidate handoff ở `handoffs/HF-20260921-02.md`; chưa gắn tag
 stable cho tới khi người dùng xác nhận bản này ổn.
+
+## Codex — storage accounting và degraded security (21/09/2026)
+
+Đã đóng phần còn mở về storage trong candidate bằng migration `0020_storage_accounting.sql`.
+`tenant_storage_usage` lưu source, logical asset, physical scan và unattributed bytes theo tenant;
+`storage_reconciliation_runs` lưu bằng chứng mỗi lần đối soát. Worker dùng advisory lock toàn cục
+cho maintenance và advisory lock theo tenant khi quyết định quota, nên nhiều worker không thể cùng
+commit vượt quota derived. Nếu render làm vượt `storage_bytes`, revision/job chuyển failed, không
+insert asset và chỉ xóa thư mục output attempt vừa sinh. Collector chỉ đụng `.uploads`,
+`.thumbnail-source`, share thumbnail và `attempts/` quá retention khi không có `assets.object_key`
+tham chiếu; không follow symlink, không tự xóa source PDF có trạng thái DB không rõ.
+
+Rate limit không còn fail-open hoàn toàn khi Redis gián đoạn: lệnh Redis có deadline 500ms,
+offline queue bị tắt, fallback in-process bị chặn kích thước và có TTL. Login áp dụng cap cho
+`(source, account)` và source; password sách áp dụng cap cho `(book, source)` và source. Thành công
+chỉ reset counters của chính luồng hợp lệ. IP/email được HMAC trước khi trở thành Redis/fallback key;
+key thô của bản cũ tự hết hạn theo cửa sổ tối đa 15 phút khi rollout, không có migration xóa gây
+mất đột ngột rate-limit đang hoạt động.
+
+**Kiểm chứng thực tế:** Docker Compose biệt lập `misa-flipbook-codex-storage`, API 13000, DB 15432,
+web 13001; migration 0001–0020 sạch từ database rỗng. API TypeScript và Next production build pass.
+RLS 13/13; P1 14/14; P2 21/21; P3 35/35; F16 12/12; P5 21/21; security cache/quyền/rate-limit
+14/14; job lease/replay 12/12; upload stream/quota/disconnect 6/6; storage reconciliation/quota
+9/9; Redis-down fallback/password-spray 3/3; PDF worker supervisor/geometry/thumbnail 13 tests.
+Redis được dừng thật trong stack cô lập rồi khởi động lại; API chặn brute-force trong lúc mất Redis,
+sau đó đăng nhập hợp lệ lại 201 và log chỉ có một cảnh báo đã redaction. Redis sạch sau một login
+sai chỉ chứa HMAC key, không chứa email/IP thô.
+
+**Không tự coi là stable:** audio/video PDF vẫn được tạm hoãn theo quyết định người dùng vì chưa có
+PDF mẫu thật và policy media; test responsive hiện chưa thay cho ma trận thiết bị cũ/mới/tablet;
+proxy/CDN/trust-proxy và cache purge phải kiểm chứng với topology do DevOps MISA chốt; local-volume
+collector không thay object-storage lifecycle/HA. Không gắn tag stable cho tới khi người dùng xác
+nhận candidate và các giới hạn chấp nhận được.

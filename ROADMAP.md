@@ -266,7 +266,9 @@ Tên/tag thực chỉ tạo sau khi người dùng nói “ổn rồi” cho phi
 ## Tiếp quản Codex — 21/09/2026
 - Đợt 1: SEC-02 verified; SEC-01/03/UI-01 verified một phần, còn điều kiện security trong docs/audits/20260921-codex-followup.md.
 - Đợt 2 core: PDF process isolation, deadline/budgets, stream upload, tenant source quota, job lease/fencing/retry và EDGE-01 đã có code + Docker regression.
-- Đợt 2 còn mở: tổng storage accounting/retention/orphan collector, soak kill/restart diện rộng.
+- Đợt 2 storage: accounting tổng source + derived asset, quota transaction-safe khi worker finalize,
+  đối soát physical usage và collector attempt mồ côi có retention đã được thêm ở migration 0020.
+  Redis-down rate limit nay co deadline, fallback bounded va chong password spraying theo source.
 - Chưa chốt stable; tiếp theo là reader/security residual, tính đúng đắn nội dung và vận hành theo báo cáo tiếp quản.
 
 ## Candidate Codex 21/09/2026 — hoàn tất các residual ưu tiên
@@ -277,3 +279,13 @@ windowed image loading/mobile accessibility, phân trang keyset Admin và runboo
 Tất cả được kiểm chứng trên Docker stack riêng; xem `MEMORYBANK.md` và
 `handoffs/HF-20260921-02.md`. Mốc này là **candidate**, không phải stable: chờ người dùng
 xác nhận và vẫn còn device/mobile thật, proxy/CDN, retention và object storage production.
+
+## Candidate Codex 21/09/2026 — storage accounting và degraded-security
+
+Candidate được nâng thêm migration `0020_storage_accounting.sql`: quota tenant tính cả PDF nguồn
+và asset render, worker khóa theo tenant trước khi commit derived assets, đối soát logical/physical
+usage, và chỉ xóa temporary upload hoặc `attempts/` không được DB tham chiếu sau retention. Redis
+rate-limit có command deadline 500ms, fallback per-process bị giới hạn bộ nhớ, cap theo source để
+chặn password spraying, và HMAC email/IP trước khi ghi key. Các kết quả thực tế và điều kiện chưa
+đủ để stable được lưu trong handoff candidate kế tiếp; vẫn cần device matrix thật, kiểm chứng
+proxy/CDN theo topology DevOps, PDF audio/video mẫu và object storage/HA trước production MISA.

@@ -8,9 +8,8 @@ import { RateLimitService } from "./rate-limit.service";
  * cho login/verify-password - dung lai ioredis giong dispatcher/worker-convert (cung
  * REDIS_URL, cung instance Redis trong docker-compose) thay vi them ha tang moi.
  *
- * lazyConnect + retryStrategy gioi han: neu Redis chet, RateLimitService fail-open
- * (xem rate-limit.service.ts) - khong bien Redis thanh single point of failure lam
- * sap tinh nang dang nhap/xem sach co mat khau.
+ * Redis commands co deadline ngan va fallback bounded per-process trong service, nen
+ * Redis khong bien login/password reader thanh single point of failure.
  */
 @Global()
 @Module({
@@ -22,11 +21,19 @@ import { RateLimitService } from "./rate-limit.service";
         if (!url) {
           throw new Error("Thieu bien moi truong REDIS_URL (rate limit dang nhap/mat khau sach).");
         }
-        return new Redis(url, {
+        const redis = new Redis(url, {
           lazyConnect: false,
-          maxRetriesPerRequest: 1,
+          enableOfflineQueue: false,
+          connectTimeout: Number(process.env.RATE_LIMIT_CONNECT_TIMEOUT_MS ?? 500),
+          maxRetriesPerRequest: 0,
           retryStrategy: (times) => Math.min(times * 200, 2000),
         });
+        // ioredis emits an "error" event even though every command failure is
+        // handled by RateLimitService. Registering a listener prevents noisy
+        // unhandled-event stacks during an expected Redis outage; the service logs
+        // one redacted warning per minute when it switches to its fallback.
+        redis.on("error", () => undefined);
+        return redis;
       },
     },
     RateLimitService,

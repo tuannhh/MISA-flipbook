@@ -41,6 +41,7 @@ import { PDF_UPLOAD } from "../../common/tenant/pdf-upload";
 import { IMAGE_UPLOAD } from "../../common/tenant/image-upload";
 
 const PDF_MAX_BYTES = Number(process.env.PDF_MAX_BYTES ?? 200 * 1024 * 1024);
+const TENANT_STORAGE_BYTES = Number(process.env.TENANT_STORAGE_BYTES ?? 50 * 1024 * 1024 * 1024);
 const PIPELINE_VERSION = process.env.PDF_PIPELINE_VERSION ?? "v1";
 const MAX_SLUG_RETRIES = 5;
 
@@ -168,9 +169,14 @@ export class BooksController {
     const budget = await req.dbClient.query("SELECT * FROM upload_tenant_budget($1)", [req.tenantId]);
     const usage = budget.rows[0];
     const maxSource = Number(usage.quotas?.source_bytes ?? process.env.TENANT_SOURCE_BYTES ?? 10737418240);
+    const maxLogical = Number(usage.quotas?.storage_bytes ?? TENANT_STORAGE_BYTES);
     const maxJobs = Number(usage.quotas?.pending_jobs ?? process.env.TENANT_PENDING_JOBS ?? 20);
-    if (Number(usage.source_bytes) + file.size > maxSource || Number(usage.pending_jobs) >= maxJobs) {
-      throw new ConflictException("Tenant da vuot han muc dung luong PDF hoac so job dang cho.");
+    if (
+      Number(usage.source_bytes) + file.size > maxSource ||
+      Number(usage.logical_bytes) + file.size > maxLogical ||
+      Number(usage.pending_jobs) >= maxJobs
+    ) {
+      throw new ConflictException("Tenant da vuot han muc dung luong hoac so job dang cho.");
     }
 
     await this.storage.adoptFile(objectKey, file.path);

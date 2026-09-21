@@ -13,7 +13,12 @@ const STORAGE_ROOT = path.resolve(process.env.STORAGE_ROOT);
 const LEASE_SECONDS = Number(process.env.JOB_LEASE_SECONDS ?? 60);
 const MAX_ATTEMPTS = Number(process.env.JOB_ATTEMPTS ?? 3);
 const HTTP_TIMEOUT_MS = (Number(process.env.PDF_TIMEOUT_SECONDS ?? 600) + 30) * 1000;
-if (!(LEASE_SECONDS >= 15 && MAX_ATTEMPTS >= 1)) throw new Error("Invalid job limits");
+const TENANT_STORAGE_BYTES = Number(process.env.TENANT_STORAGE_BYTES ?? 50 * 1024 * 1024 * 1024);
+const STORAGE_RECONCILE_INTERVAL_MS = Number(process.env.STORAGE_RECONCILE_INTERVAL_MS ?? 6 * 60 * 60 * 1000);
+const { reconcileStorage, pool: storageReconcilerPool } = require("./storage-reconciler");
+if (!(LEASE_SECONDS >= 15 && MAX_ATTEMPTS >= 1 && Number.isSafeInteger(TENANT_STORAGE_BYTES) && TENANT_STORAGE_BYTES > 0)) {
+  throw new Error("Invalid worker limits");
+}
 
 async function withAdminTx(fn) {
   const client = await pool.connect();
@@ -68,6 +73,18 @@ async function lockOwnedJob(client, ctx) {
   return result.rowCount === 1;
 }
 
+async function hasDerivedStorageCapacity(client, tenantId, bytesToAdd) {
+  // Serialize quota decisions across all worker instances. A periodic physical scan is
+  // diagnostic only; asset rows are the authoritative transactional accounting source.
+  await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [tenantId]);
+  const tenant = await client.query("SELECT quotas FROM tenants WHERE id=$1 FOR UPDATE", [tenantId]);
+  if (!tenant.rows[0]) return false;
+  const quota = Number(tenant.rows[0].quotas?.storage_bytes ?? TENANT_STORAGE_BYTES);
+  if (!Number.isSafeInteger(quota) || quota < 1) return false;
+  const used = await client.query("SELECT COALESCE(SUM(bytes),0)::bigint AS bytes FROM assets WHERE tenant_id=$1", [tenantId]);
+  return Number(used.rows[0].bytes) + bytesToAdd <= quota;
+}
+
 async function finalizeSuccess(ctx, outputKey, manifest) {
   // Output key belongs exclusively to this lease. No shared derived/ directory.
   if (!Array.isArray(manifest.pages) || manifest.pages.length !== manifest.n_pages) throw new Error("Invalid manifest");
@@ -87,8 +104,19 @@ async function finalizeSuccess(ctx, outputKey, manifest) {
   await fs.writeFile(path.join(STORAGE_ROOT, manifestKey), JSON.stringify(manifest), { flag: "wx" })
     .catch(err => { if (err.code !== "EEXIST") throw err; });
   assets.push(["manifest", manifestKey, "application/json", (await fs.stat(path.join(STORAGE_ROOT, manifestKey))).size]);
-  return withAdminTx(async client => {
+  let quotaExceeded = false;
+  const committed = await withAdminTx(async client => {
     if (!await lockOwnedJob(client, ctx)) return false;
+    const derivedBytes = assets.reduce((total, [, , , bytes]) => total + bytes, 0);
+    if (!await hasDerivedStorageCapacity(client, ctx.tenant_id, derivedBytes)) {
+      quotaExceeded = true;
+      await client.query("UPDATE revisions SET state='failed' WHERE id=$1 AND state='converting'", [ctx.revision_id]);
+      await client.query(
+        "UPDATE jobs SET state='failed', error=$2, lease_token=NULL, lease_expires_at=NULL WHERE id=$1",
+        [ctx.job_id, "Tenant vuot han muc dung luong sau khi render PDF."]
+      );
+      return false;
+    }
     const revision = await client.query(`UPDATE revisions SET state='ready', manifest_key=$2
       WHERE id=$1 AND state='converting' RETURNING id`, [ctx.revision_id, manifestKey]);
     if (!revision.rows.length) throw new Error("Revision no longer converting");
@@ -100,6 +128,10 @@ async function finalizeSuccess(ctx, outputKey, manifest) {
       lease_token=NULL,lease_expires_at=NULL WHERE id=$1`, [ctx.job_id]);
     return true;
   });
+  // This branch has committed a terminal failed job and inserted no asset rows, so
+  // removing the generated attempt cannot race a reader or a later worker attempt.
+  if (quotaExceeded) await fs.rm(outputPath, { recursive: true, force: true }).catch(() => {});
+  return committed;
 }
 
 async function finalizeFailure(ctx, message, permanent = true, busy = false) {
@@ -157,7 +189,21 @@ async function main() {
   const connection = new IORedis(process.env.REDIS_URL, {maxRetriesPerRequest:null});
   const worker = new Worker("pdf-conversion", processJob, {connection,concurrency:Number(process.env.CONCURRENCY ?? 2)});
   worker.on("failed", (job, err) => console.error(`Job ${job?.id}: ${err.message}`));
-  const shutdown = async () => { await worker.close(); connection.disconnect(); await pool.end(); process.exit(0); };
+  const runReconciler = async () => {
+    try {
+      const result = await reconcileStorage();
+      if (!result.skipped) console.log(`Storage reconciled: ${result.tenantsScanned} tenants, ${result.deletedPaths} stale paths removed.`);
+    } catch (err) {
+      console.error(`Storage reconciliation failed: ${err.message}`);
+    }
+  };
+  const maintenanceEnabled = Number.isSafeInteger(STORAGE_RECONCILE_INTERVAL_MS) && STORAGE_RECONCILE_INTERVAL_MS >= 60_000;
+  if (maintenanceEnabled) void runReconciler();
+  const maintenanceTimer = maintenanceEnabled ? setInterval(() => void runReconciler(), STORAGE_RECONCILE_INTERVAL_MS) : null;
+  const shutdown = async () => {
+    if (maintenanceTimer) clearInterval(maintenanceTimer);
+    await worker.close(); connection.disconnect(); await Promise.all([pool.end(), storageReconcilerPool.end()]); process.exit(0);
+  };
   process.on("SIGTERM", shutdown);
   process.on("SIGINT", shutdown);
 }

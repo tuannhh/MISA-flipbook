@@ -22,7 +22,7 @@ import { JwtService } from "@nestjs/jwt";
 import type { Request, Response } from "express";
 import { Pool } from "pg";
 import { DB_POOL } from "../../common/db/db.tokens";
-import { RateLimitService } from "../../common/rate-limit/rate-limit.service";
+import { rateLimitKeyPart, RateLimitService } from "../../common/rate-limit/rate-limit.service";
 import { STORAGE_ADAPTER, StorageAdapter } from "../../storage/storage.interface";
 import { buildReaderPages } from "../books/util/build-reader-pages";
 import { RecordBookEventDto } from "./dto/record-book-event.dto";
@@ -32,6 +32,7 @@ const BOOK_ACCESS_TOKEN_TYP = "book_access";
 const BOOK_ACCESS_TOKEN_TTL_SECONDS = Number(process.env.BOOK_ACCESS_TOKEN_TTL_SECONDS ?? 4 * 60 * 60);
 const OWNER_READER_TOKEN_TTL_SECONDS = Number(process.env.OWNER_READER_TOKEN_TTL_SECONDS ?? 10 * 60);
 const PASSWORD_MAX_ATTEMPTS = Number(process.env.BOOK_PASSWORD_MAX_ATTEMPTS ?? 8);
+const PASSWORD_IP_MAX_ATTEMPTS = Number(process.env.BOOK_PASSWORD_IP_MAX_ATTEMPTS ?? 32);
 const PASSWORD_LOCK_MINUTES = Number(process.env.BOOK_PASSWORD_LOCKOUT_MINUTES ?? 15);
 
 type ReaderScope = "public" | "password" | "owner";
@@ -396,22 +397,37 @@ export class PublicBooksController {
   async verifyPassword(@Param("permalink") permalink: string, @Body() dto: VerifyBookPasswordDto, @Req() req: Request) {
     const book = await this.findPublishedBook(permalink);
     if (book.visibility === "private" || !book.password_hash) throw new BadRequestException("Sach nay khong nhan mat khau o che do hien tai.");
-    const rlKey = `bookpw:${book.book_id}:${req.ip}`;
-    const rl = await this.rateLimit.consume(rlKey, PASSWORD_MAX_ATTEMPTS, PASSWORD_LOCK_MINUTES * 60);
-    if (!rl.allowed) {
+    const windowSeconds = PASSWORD_LOCK_MINUTES * 60;
+    const sourceKey = `bookpw-ip:${rateLimitKeyPart(`book-password-source:${req.ip}`)}`;
+    const bookKey = `bookpw:${book.book_id}:${rateLimitKeyPart(`book-password:${req.ip}`)}`;
+    // A book/IP cap avoids one reader locking everyone out. The source cap also
+    // stops a single client spraying a password over many public books.
+    const sourceResult = await this.rateLimit.consume(sourceKey, PASSWORD_IP_MAX_ATTEMPTS, windowSeconds);
+    if (!sourceResult.allowed) {
       throw new HttpException(
         {
           statusCode: HttpStatus.TOO_MANY_REQUESTS,
-          message: `Da nhap sai qua nhieu lan. Thu lai sau khoang ${Math.ceil(rl.retryAfterSeconds / 60)} phut.`,
-          retryAfterSeconds: rl.retryAfterSeconds,
+          message: `Da co qua nhieu lan thu mat khau tu ket noi nay. Thu lai sau khoang ${Math.ceil(sourceResult.retryAfterSeconds / 60)} phut.`,
+          retryAfterSeconds: sourceResult.retryAfterSeconds,
+        },
+        HttpStatus.TOO_MANY_REQUESTS
+      );
+    }
+    const bookResult = await this.rateLimit.consume(bookKey, PASSWORD_MAX_ATTEMPTS, windowSeconds);
+    if (!bookResult.allowed) {
+      throw new HttpException(
+        {
+          statusCode: HttpStatus.TOO_MANY_REQUESTS,
+          message: `Da nhap sai qua nhieu lan. Thu lai sau khoang ${Math.ceil(bookResult.retryAfterSeconds / 60)} phut.`,
+          retryAfterSeconds: bookResult.retryAfterSeconds,
         },
         HttpStatus.TOO_MANY_REQUESTS
       );
     }
     const ok = await argon2.verify(book.password_hash, dto.password).catch(() => false);
     await this.pool.query("SELECT public_record_password_attempt($1,$2,$3,$4)", [book.book_id, ok, PASSWORD_MAX_ATTEMPTS, PASSWORD_LOCK_MINUTES]).catch(() => undefined);
-    if (!ok) throw new UnauthorizedException(`Sai mat khau. Con toi da ${rl.remaining} lan thu tu dia chi nay.`);
-    await this.rateLimit.reset(rlKey);
+    if (!ok) throw new UnauthorizedException(`Sai mat khau. Con toi da ${bookResult.remaining} lan thu tu dia chi nay.`);
+    await Promise.all([this.rateLimit.reset(bookKey), this.rateLimit.reset(sourceKey)]);
     const grant = await this.issueReadGrant(book, "password");
     return { readerToken: grant.readerToken, expiresIn: BOOK_ACCESS_TOKEN_TTL_SECONDS };
   }

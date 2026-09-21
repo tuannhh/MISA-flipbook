@@ -2,9 +2,10 @@ import { Body, Controller, HttpException, HttpStatus, Post, Req } from "@nestjs/
 import type { Request } from "express";
 import { AuthService } from "./auth.service";
 import { LoginDto } from "./dto/login.dto";
-import { RateLimitService } from "../../common/rate-limit/rate-limit.service";
+import { rateLimitKeyPart, RateLimitService } from "../../common/rate-limit/rate-limit.service";
 
 const LOGIN_MAX_ATTEMPTS = Number(process.env.LOGIN_MAX_ATTEMPTS ?? 10);
+const LOGIN_IP_MAX_ATTEMPTS = Number(process.env.LOGIN_IP_MAX_ATTEMPTS ?? 30);
 const LOGIN_WINDOW_SECONDS = Number(process.env.LOGIN_WINDOW_SECONDS ?? 15 * 60);
 
 @Controller("auth")
@@ -28,20 +29,33 @@ export class AuthController {
    */
   @Post("login")
   async login(@Body() dto: LoginDto, @Req() req: Request): Promise<{ accessToken: string }> {
-    const key = `login:${req.ip}:${dto.email.trim().toLowerCase()}`;
-    const result = await this.rateLimit.consume(key, LOGIN_MAX_ATTEMPTS, LOGIN_WINDOW_SECONDS);
-    if (!result.allowed) {
+    const email = dto.email.trim().toLowerCase();
+    const sourceKey = `login-ip:${rateLimitKeyPart(`source:${req.ip}`)}`;
+    const accountKey = `login-account:${rateLimitKeyPart(`account:${req.ip}:${email}`)}`;
+    const sourceResult = await this.rateLimit.consume(sourceKey, LOGIN_IP_MAX_ATTEMPTS, LOGIN_WINDOW_SECONDS);
+    if (!sourceResult.allowed) {
+      throw new HttpException(
+        {
+          statusCode: HttpStatus.TOO_MANY_REQUESTS,
+          message: "Da co qua nhieu lan dang nhap tu ket noi nay. Vui long thu lai sau.",
+          retryAfterSeconds: sourceResult.retryAfterSeconds,
+        },
+        HttpStatus.TOO_MANY_REQUESTS
+      );
+    }
+    const accountResult = await this.rateLimit.consume(accountKey, LOGIN_MAX_ATTEMPTS, LOGIN_WINDOW_SECONDS);
+    if (!accountResult.allowed) {
       throw new HttpException(
         {
           statusCode: HttpStatus.TOO_MANY_REQUESTS,
           message: "Da dang nhap sai qua nhieu lan. Vui long thu lai sau.",
-          retryAfterSeconds: result.retryAfterSeconds,
+          retryAfterSeconds: accountResult.retryAfterSeconds,
         },
         HttpStatus.TOO_MANY_REQUESTS
       );
     }
     const res = await this.authService.login(dto.email, dto.password);
-    await this.rateLimit.reset(key);
+    await Promise.all([this.rateLimit.reset(accountKey), this.rateLimit.reset(sourceKey)]);
     return res;
   }
 }

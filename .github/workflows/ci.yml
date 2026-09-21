@@ -146,6 +146,12 @@ jobs:
           trap 'docker compose start dispatcher' EXIT
           docker compose exec -T worker-convert node /app/pipeline_jobs.test.js
 
+      - name: Run storage accounting and orphan-retention regression
+        working-directory: infra/docker
+        run: |
+          docker compose cp ../../tests/integration/storage_reconciliation.test.js worker-convert:/app/storage_reconciliation.test.js
+          docker compose exec -T worker-convert node /app/storage_reconciliation.test.js
+
       - name: Run upload concurrency, quota and disconnect regression
         working-directory: infra/docker
         run: |
@@ -153,6 +159,17 @@ jobs:
           docker compose exec -T -e NODE_PATH=/app/node_modules \
             -e TEST_DATABASE_URL=postgres://misa_admin:ci_pg_password_${{ github.run_id }}@postgres:5432/misa_flipbook \
             api node /app/tests/integration/pipeline_upload.test.js
+
+      - name: Run rate-limit fallback regression while Redis is unavailable
+        working-directory: infra/docker
+        env:
+          API_BASE_URL: http://127.0.0.1:3000
+          SEED_ADMIN_EMAIL: admin@misa.local
+          SEED_ADMIN_PASSWORD: ChangeThisAdminPw123!
+        run: |
+          docker compose stop redis
+          trap 'docker compose start redis' EXIT
+          node ../../tests/integration/rate_limit_fallback.test.js
 
       - name: Dump logs on failure
         if: failure()
