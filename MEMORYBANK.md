@@ -1758,4 +1758,5 @@ Range download PDF gốc. Reader được kiểm tra trực tiếp trong browser
 **Giới hạn còn mở trước stable:** chưa có PDF MISA thật có video hoặc đủ ma trận codec; `/Sound` raw PCM
 và media không nằm ở ba annotation trên chưa hỗ trợ; kiểm tra browser là desktop Docker, không thay device
 matrix cũ/mới/tablet. Không coi F10 hoàn tất hay candidate là stable cho đến khi corpus MISA và policy
-media được nghiệm thu. Handoff kế tiếp phải trỏ đến source revision sau khi commit thay đổi này.
+media được nghiệm thu. Hồ sơ candidate: `handoffs/HF-20260921-05.md`, runtime source
+`4b82244de928eea1d4abe3a922963f08b559eb6a`.
