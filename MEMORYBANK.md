@@ -1780,3 +1780,12 @@ API + Next production build pass. CI chạy thêm regression cookie. Handoff hi�
 `handoffs/HF-20260921-06.md`. Đây chỉ sẵn sàng bàn giao Docker pilot/staging; TLS/proxy topology,
 backup restore, device matrix và corpus MISA còn là production gates. Không gắn stable tag trước
 khi người dùng xác nhận candidate đã deploy.
+
+## Codex — khôi phục tạo flipbook cho System Admin (21/09/2026)
+
+Từ feedback UI Docker, phát hiện Admin dashboard đã giữ Xem/Sửa/Xóa nhưng lỡ bỏ nút tạo sách khi
+rút gọn F13. Commit `493835dff0b5500b01ebba1ddfa4ee8cf6218c86` thêm create flow: Admin chọn tenant
+đang active, nhập tiêu đề, tạo sách do Admin sở hữu qua API/RLS hiện có và được điều hướng thẳng tới
+trang upload PDF. Nút có trên desktop/mobile; tenant suspended không được chọn. Production build pass;
+Docker proxy test 15/15 xác nhận Admin list tenant active + tạo book thật cùng các cookie/CSRF assertions.
+Handoff candidate hiện hành: `handoffs/HF-20260921-07.md`.
