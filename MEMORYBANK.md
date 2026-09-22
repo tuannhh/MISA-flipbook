@@ -1626,3 +1626,166 @@ Sau mỗi đợt công việc, ghi: đã đổi gì, quyết định/giả đị
 Giữ lịch sử ADR nếu thay quyết định, đánh dấu superseded thay vì xóa.
 Khi người dùng nói “ổn rồi”, làm quy trình HANDOFF.md cho đúng build hiện tại; nếu chỉ duyệt kế hoạch thì ghi duyệt tài liệu, không tạo stable ứng dụng giả.
 Đọc README, MEMORYBANK và hồ sơ handoff gần nhất trước khi tiếp tục phát triển.
+
+## Codex tiếp quản pipeline sau phản hồi Claude (21/09/2026)
+
+Baseline 745e28c. Đã đọc CLAUDE-RESPONSE-20260921 và kiểm chứng lại. SEC-02 chấp nhận theo quyết định suspend chỉ chặn quản trị; SEC-01/03 và UI-01 còn điều kiện an toàn cần hoàn thiện (cache transition, Redis fallback, JWT đăng nhập trong URL). Không phủ nhận các lỗi Claude đã sửa đúng.
+
+Đã triển khai PDF supervisor dùng subprocess riêng + kill/reap deadline; disk-stream upload với DB preflight ngắn, kiểm quyền lại sau body; giới hạn file/trang/pixel/output/RAM/CPU; quota nguồn và pending jobs theo tenant; job generation/lease/heartbeat/fenced completion, DB retries và unique assets; ON CONFLICT slug và serialize revision number. Migrations 0015/0016. Chi tiết thiết kế, kiểm chứng và giới hạn ở [báo cáo tiếp quản](docs/audits/20260921-codex-followup.md).
+
+Kiểm chứng trên stack Docker RIÊNG misa-flipbook-codex-test: 123 assertion regression cũ + 12 job + 6 upload; 7 test case Python supervisor. Stack người dùng đang dùng chưa thay đổi. Không gắn stable tag. Giao thức job mới yêu cầu triển khai dispatcher/worker đồng bộ, không rolling mix với worker cũ. Chưa đóng toàn bộ PDF-02: accounting dung lượng ảnh/attempt mồ côi và retention collector còn mở. PERF/reader và đợt vận hành chưa thực hiện trong thay đổi này.
+
+## Codex — Reader, nội dung và vận hành (21/09/2026, candidate sau audit)
+
+Đợt tiếp theo đã hoàn tất trên nhánh tách biệt, kế thừa baseline pipeline `d000b18`.
+Mục tiêu là đóng các finding còn lại mà không phủ nhận phần Claude đã sửa đúng.
+
+- **Reader và bảo mật:** Dashboard JWT chỉ dùng một lần để đổi lấy reader token có scope
+  đúng một sách/revision, TTL ngắn và access epoch. Token cũ mất hiệu lực ngay khi đổi
+  mật khẩu/visibility; owner token kiểm tra lại tài khoản/membership ở từng request.
+  Reader đang mở được ghim revision cũ cho tới hết phiên, vì thế thay PDF không làm trắng
+  trang giữa lúc đọc. Sự kiện `open`/`page_view` được deduplicate bằng session ID ở DB;
+  metadata SSR không còn tự ghi lượt mở. Asset protected là `private, no-store`; asset
+  public buộc tái xác thực (`public, max-age=0, must-revalidate`) để đổi Public →
+  Password/Private không rò từ cache cũ. Khi rollout qua CDN phải purge cache cũ một lần.
+- **PDF/nội dung:** hyperlink dùng CropBox và chiều Rotate đúng với ảnh PDFium; chỉ cho
+  `https/http`, `mailto`, `tel`, chặn `javascript:`, `data:` và protocol-relative URL.
+  Thumbnail chia sẻ nhận PNG/JPEG/WebP tối đa 8 MB qua disk-streamed upload, worker riêng
+  chuyển thành WebP 1200×675; metadata Open Graph lấy cover này. Sách protected chủ động
+  không có preview cho crawler.
+- **Trải nghiệm:** public URL chuẩn là `/<slug>-<8 ký tự>` và embed là `/.../embed`, vẫn
+  giữ `/read/...` cho link cũ. Reader preload theo cửa sổ viewport thay vì toàn bộ sách,
+  touch/coarse pointer luôn hiển thị một trang, có page jump + thumbnail navigator, target
+  tối thiểu 48px và dialog trap focus. Admin books dùng keyset cursor trên server thay cho
+  tải cố định 500 dòng ở client.
+- **Vận hành:** backup/restore script có manifest + SHA-256 và bắt buộc `--quiesce`; chỉ
+  dùng cho pilot volume local. Restore script là thao tác phá hủy và phải chạy trên staging
+  trước khi dùng production. Chưa coi script mới là restore drill production.
+
+**Bằng chứng thực thi trên Docker stack riêng `misa-flipbook-codex-review` (cổng 13000/13001):**
+migration 0001–0019 chạy sạch; API build và Next production build pass. Test tích hợp có
+kết quả: P1 13+14, P2 22, P3 35, F16 12, P5 21, security audit 14, pipeline job lease 12,
+pipeline upload 6, Python PDF worker 13. Không chạy trên stack Docker chính của người dùng.
+
+**Giới hạn còn mở trước stable:** chưa có test thiết bị mobile thật cho UI mới, chưa có PDF
+thật chứa audio/video, chưa có CDN/proxy production để xác minh purge/trust-proxy, chưa có
+retention collector cho artifact attempt mồ côi hoặc accounting ảnh dẫn xuất, và chưa có
+object storage/HA production. Candidate handoff ở `handoffs/HF-20260921-02.md`; chưa gắn tag
+stable cho tới khi người dùng xác nhận bản này ổn.
+
+## Codex — storage accounting và degraded security (21/09/2026)
+
+Đã đóng phần còn mở về storage trong candidate bằng migration `0020_storage_accounting.sql`.
+`tenant_storage_usage` lưu source, logical asset, physical scan và unattributed bytes theo tenant;
+`storage_reconciliation_runs` lưu bằng chứng mỗi lần đối soát. Worker dùng advisory lock toàn cục
+cho maintenance và advisory lock theo tenant khi quyết định quota, nên nhiều worker không thể cùng
+commit vượt quota derived. Nếu render làm vượt `storage_bytes`, revision/job chuyển failed, không
+insert asset và chỉ xóa thư mục output attempt vừa sinh. Collector chỉ đụng `.uploads`,
+`.thumbnail-source`, share thumbnail và `attempts/` quá retention khi không có `assets.object_key`
+tham chiếu; không follow symlink, không tự xóa source PDF có trạng thái DB không rõ.
+
+Rate limit không còn fail-open hoàn toàn khi Redis gián đoạn: lệnh Redis có deadline 500ms,
+offline queue bị tắt, fallback in-process bị chặn kích thước và có TTL. Login áp dụng cap cho
+`(source, account)` và source; password sách áp dụng cap cho `(book, source)` và source. Thành công
+chỉ reset counters của chính luồng hợp lệ. IP/email được HMAC trước khi trở thành Redis/fallback key;
+key thô của bản cũ tự hết hạn theo cửa sổ tối đa 15 phút khi rollout, không có migration xóa gây
+mất đột ngột rate-limit đang hoạt động.
+
+**Kiểm chứng thực tế:** Docker Compose biệt lập `misa-flipbook-codex-storage`, API 13000, DB 15432,
+web 13001; migration 0001–0020 sạch từ database rỗng. API TypeScript và Next production build pass.
+RLS 13/13; P1 14/14; P2 21/21; P3 35/35; F16 12/12; P5 21/21; security cache/quyền/rate-limit
+14/14; job lease/replay 12/12; upload stream/quota/disconnect 6/6; storage reconciliation/quota
+9/9; Redis-down fallback/password-spray 3/3; PDF worker supervisor/geometry/thumbnail 13 tests.
+Redis được dừng thật trong stack cô lập rồi khởi động lại; API chặn brute-force trong lúc mất Redis,
+sau đó đăng nhập hợp lệ lại 201 và log chỉ có một cảnh báo đã redaction. Redis sạch sau một login
+sai chỉ chứa HMAC key, không chứa email/IP thô.
+
+**Không tự coi là stable:** audio/video PDF vẫn được tạm hoãn theo quyết định người dùng vì chưa có
+PDF mẫu thật và policy media; test responsive hiện chưa thay cho ma trận thiết bị cũ/mới/tablet;
+proxy/CDN/trust-proxy và cache purge phải kiểm chứng với topology do DevOps MISA chốt; local-volume
+collector không thay object-storage lifecycle/HA. Không gắn tag stable cho tới khi người dùng xác
+nhận candidate và các giới hạn chấp nhận được.
+Hồ sơ candidate của đợt storage: `handoffs/HF-20260921-03.md` (runtime source
+`00e3af4ad3147ae913d6f0a79b4565dee0eb599c`).
+
+## Codex — Docker public edge và trust-proxy (21/09/2026)
+
+Đã thay topology pilot cũ (API/web mở port trực tiếp) bằng Nginx non-root làm public edge duy nhất.
+Browser gọi API qua path cùng origin `/api`; API/web chỉ còn ở Compose network. Proxy stream upload,
+giữ `Cache-Control` do API quyết định, giới hạn body 201 MB và có `nosniff`, Permissions-Policy tối
+thiểu, Referrer-Policy `strict-origin-when-cross-origin`. Header này đặc biệt ngăn reader grant ở
+query string bị gửi theo Referer khi người đọc mở hyperlink ngoài domain. Không đặt X-Frame-Options
+vì `/embed` được phép nhúng theo yêu cầu sản phẩm.
+
+Nginx luôn ghi đè `X-Forwarded-For` bằng địa chỉ TCP peer trước khi chuyển API. `main.ts` chỉ bật
+Express `trust proxy` khi `TRUST_PROXY_HOPS` hợp lệ từ 1 đến 2; Docker default là 1, deploy direct là
+0. Regression tạo một login sai với XFF giả rồi thử lại không header; cả hai bị cùng lockout, chứng
+minh client không tự đổi source được. Đây là kiểm chứng cho **một Nginx hop**. Nếu MISA thêm CDN,
+load balancer hoặc TLS gateway, DevOps phải chốt chain, bảo vệ upstream và cấu hình hop/allowlist
+tương ứng; không coi `1` là giá trị production mặc định.
+
+**Kiểm chứng thực tế trên Compose cô lập `misa-flipbook-codex-proxy`:** proxy chỉ public
+`127.0.0.1:13000`; API/web chỉ có port nội bộ. HTTP web và `/health` trả 200. `proxy_security` 5/5,
+P1 14/14, P2 21/21, P3 35/35, security audit 14/14 và P5 21/21 đều gọi `http://127.0.0.1:13000/api`.
+Đây là candidate; vẫn chưa thay device matrix thật, PDF audio/video mẫu, CDN cache purge, TLS topology,
+object storage/HA hay stable acceptance. Hồ sơ candidate hiện hành: `handoffs/HF-20260921-04.md`.
+
+## Codex — baseline media PDF nhúng an toàn (21/09/2026)
+
+Đã tiếp tục phần F10 Mức B mà Claude chưa kịp làm, với phạm vi cố ý hẹp để không biến file PDF
+người dùng upload thành nguồn SSRF hay thực thi nội dung: worker chỉ xét annotation `/Movie`, `/Screen`
+với action `/Rendition`, và `/RichMedia` Assets. Mỗi đối tượng phải có `/EF` embedded stream ngay trong
+PDF; URL, local path, JavaScript, Launch, Flash/3D và arbitrary action bị bỏ qua. Không tin filename
+hoặc PDF `/Subtype`: byte được sniff và chỉ WAV, MP3, Ogg, WebM, MP4 được lưu. Giới hạn mặc định là
+20 MiB/object (`PDF_MEDIA_MAX_BYTES`) và 50 MiB/PDF (`PDF_MEDIA_TOTAL_BYTES`); file sai loại hoặc quá
+ngưỡng tạo warning theo trang, không làm publish asset nguy hiểm.
+
+Manifest chỉ đưa `mediaAssetId`, không đưa storage object key. `worker-convert` persist media như asset
+riêng và migration `0021_pdf_embedded_media.sql` mở đúng kind này cho reader RLS function. Reader render
+`audio`/`video` tại rect đã chuẩn hoá, `preload="none"`, không autoplay và pause khi trang không còn active.
+Media, image và PDF download cùng dùng read grant scope theo book/revision/password/Private. Endpoint asset
+và download hỗ trợ một HTTP byte range hợp lệ, trả 206/416 đúng header để browser seek mà không mở lỗ hổng
+qua direct storage URL.
+
+**Kiểm chứng thực tế:** Compose cô lập `misa-flipbook-codex-media` cold-start từ DB rỗng, migration
+0001–0021. Fixture `sample_embedded_audio.pdf` có WAV nhúng thật trong `/Movie`; converter unit 8/8,
+API và web production build pass. E2E qua public proxy `127.0.0.1:13000/api` đạt 15/15: upload → convert
+→ publish, manifest không lộ path, range `206` trả header RIFF đúng, không có reader grant trả 403 sau
+khi bật password, và suffix range qua grant password vẫn phát được. P5 regression 21/21 pass, gồm
+Range download PDF gốc. Reader được kiểm tra trực tiếp trong browser: 1 audio control có source scoped,
+`audio/wav`, `preload=none`, đúng một overlay.
+
+Sau khi thêm assertion `416` cho range không thoả, E2E đạt 16/16. Dependency audit tại thời điểm
+candidate: `npm audit --omit=dev` cho API, web và worker-convert đều 0 advisory; `pip-audit` với
+`services/pdf-worker/requirements.txt` cũng không có advisory đã biết. Đây là snapshot advisory,
+không thay thế quét image/digest ở môi trường deploy MISA.
+
+**Giới hạn còn mở trước stable:** chưa có PDF MISA thật có video hoặc đủ ma trận codec; `/Sound` raw PCM
+và media không nằm ở ba annotation trên chưa hỗ trợ; kiểm tra browser là desktop Docker, không thay device
+matrix cũ/mới/tablet. Không coi F10 hoàn tất hay candidate là stable cho đến khi corpus MISA và policy
+media được nghiệm thu. Hồ sơ candidate: `handoffs/HF-20260921-05.md`, runtime source
+`4b82244de928eea1d4abe3a922963f08b559eb6a`.
+
+## Codex — candidate Docker session an toàn (21/09/2026)
+
+Candidate `882edd457d6bc76f523fcd617f4b829802929006` thay JWT Dashboard trong
+`localStorage` bằng cookie `HttpOnly` cùng origin; frontend chỉ còn state UI không bí mật trong
+`sessionStorage`. Mọi POST/PUT/PATCH/DELETE dùng cookie phải gửi double-submit CSRF token, trong
+khi Bearer cho CLI/tích hợp vẫn tương thích. Login/logout `private, no-store`; API từ chối
+`CORS_ORIGIN=*` và Docker có biến `AUTH_COOKIE_SECURE` (HTTPS MISA bắt buộc `true`).
+
+Compose cô lập `misa-flipbook-cookie`, edge `127.0.0.1:13000`, fresh DB migration 0001–0021:
+cookie/CSRF/CORS 13/13; P1 14/14; P2 21/21; P3 35/35; F16 12/12; SEC 14/14; media 16/16;
+API + Next production build pass. CI chạy thêm regression cookie. Handoff hiện hành:
+`handoffs/HF-20260921-06.md`. Đây chỉ sẵn sàng bàn giao Docker pilot/staging; TLS/proxy topology,
+backup restore, device matrix và corpus MISA còn là production gates. Không gắn stable tag trước
+khi người dùng xác nhận candidate đã deploy.
+
+## Codex — khôi phục tạo flipbook cho System Admin (21/09/2026)
+
+Từ feedback UI Docker, phát hiện Admin dashboard đã giữ Xem/Sửa/Xóa nhưng lỡ bỏ nút tạo sách khi
+rút gọn F13. Commit `493835dff0b5500b01ebba1ddfa4ee8cf6218c86` thêm create flow: Admin chọn tenant
+đang active, nhập tiêu đề, tạo sách do Admin sở hữu qua API/RLS hiện có và được điều hướng thẳng tới
+trang upload PDF. Nút có trên desktop/mobile; tenant suspended không được chọn. Production build pass;
+Docker proxy test 15/15 xác nhận Admin list tenant active + tạo book thật cùng các cookie/CSRF assertions.
+Handoff candidate hiện hành: `handoffs/HF-20260921-07.md`.

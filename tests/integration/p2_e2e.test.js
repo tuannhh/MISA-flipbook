@@ -128,12 +128,33 @@ async function main() {
   );
   check("cover_asset_id tu dong co gia tri sau publish", !!publish.data.cover_asset_id, publish.data);
 
+  const adminBooksFirst = await api("GET", "/admin/books?limit=1", { token: adminToken });
+  check(
+    "Admin books dung server-side keyset page va tra total/cursor contract",
+    adminBooksFirst.status === 200 && Array.isArray(adminBooksFirst.data?.items) && adminBooksFirst.data.items.length === 1 && Number.isInteger(adminBooksFirst.data.total),
+    adminBooksFirst.data
+  );
+  if (adminBooksFirst.data?.nextCursor) {
+    const adminBooksSecond = await api("GET", `/admin/books?limit=1&cursor=${encodeURIComponent(adminBooksFirst.data.nextCursor)}`, { token: adminToken });
+    check(
+      "Admin cursor doc trang tiep theo ma khong lap lai sach truoc",
+      adminBooksSecond.status === 200 && adminBooksSecond.data?.items?.[0]?.id !== adminBooksFirst.data.items[0].id,
+      adminBooksSecond.data
+    );
+  }
+
   console.log("\nTest: Public reader (khong token) xem duoc sach vua publish.");
   const publicBook = await api("GET", `/public/books/${permalink}`);
   check(
     "public book tra ve dung so trang, khong lo allowDownload=true mac dinh",
     publicBook.status === 200 && publicBook.data.pages.length === preview.data.pages.length && publicBook.data.allowDownload === false,
     publicBook.data
+  );
+  const readerTokenCannotUseDashboard = await api("GET", "/me", { token: publicBook.data?.readerToken });
+  check(
+    "readerToken chi doc mot sach/revision, khong the dung thay JWT Dashboard",
+    readerTokenCannotUseDashboard.status === 401,
+    readerTokenCannotUseDashboard.data
   );
 
   const firstImageId = publicBook.data.pages[0].imageAssetId;
@@ -168,6 +189,35 @@ async function main() {
     json: { thumbnailAssetId: "00000000-0000-0000-0000-000000000000" },
   });
   check("chon thumbnailAssetId khong hop le -> 400", badThumb.status === 400, badThumb);
+
+  console.log("\nTest: thumbnail chia se 16:9 duoc worker chuyen thanh WebP va public metadata dung no.");
+  // PNG 1x1 hop le. Worker phai center-crop/resize no thanh cover 1200x675, khong
+  // tin content-type do client tu khai bao.
+  const coverForm = new FormData();
+  coverForm.append(
+    "file",
+    new Blob([Buffer.from("iVBORw0KGgoAAAANSUhEUgAAABAAAAAJCAIAAAC0SDtlAAAAF0lEQVR4nGPUCFjAQApgIkn1qAZaaQAA8PkBKvrND1EAAAAASUVORK5CYII=", "base64")], { type: "image/png" }),
+    "cover.png"
+  );
+  const shareThumb = await api("POST", `/books/${bookId}/share-thumbnail`, { token, tenantId, form: coverForm });
+  check(
+    "upload thumbnail chia se thanh cong va luu asset da chuyen doi",
+    (shareThumb.status === 200 || shareThumb.status === 201) && !!shareThumb.data?.thumbnail_asset_id,
+    shareThumb.data
+  );
+  const metadataAfterCover = await api("GET", `/public/books/${permalink}/metadata`);
+  check(
+    "metadata public nhan dien thumbnail chia se cho Open Graph",
+    metadataAfterCover.status === 200 && metadataAfterCover.data?.hasPreviewImage === true,
+    metadataAfterCover.data
+  );
+  const previewImage = await fetch(`${BASE}/public/books/${permalink}/preview-image`);
+  const previewBytes = Buffer.from(await previewImage.arrayBuffer());
+  check(
+    "preview public tra WebP da chuyen doi (khong tra anh nguon truc tiep)",
+    previewImage.status === 200 && previewImage.headers.get("content-type") === "image/webp" && previewBytes.subarray(0, 4).toString() === "RIFF" && previewBytes.subarray(8, 12).toString() === "WEBP",
+    { status: previewImage.status, contentType: previewImage.headers.get("content-type"), bytes: previewBytes.length }
+  );
 
   console.log(`\n=== KET QUA P2 E2E: ${passed} PASS / ${failed} FAIL ===`);
   process.exit(failed > 0 ? 1 : 0);

@@ -17,20 +17,26 @@ import {
   UnauthorizedException,
 } from "@nestjs/common";
 import * as argon2 from "argon2";
+import { randomUUID } from "crypto";
 import { JwtService } from "@nestjs/jwt";
 import type { Request, Response } from "express";
 import { Pool } from "pg";
 import { DB_POOL } from "../../common/db/db.tokens";
+import { rateLimitKeyPart, RateLimitService } from "../../common/rate-limit/rate-limit.service";
 import { STORAGE_ADAPTER, StorageAdapter } from "../../storage/storage.interface";
 import { buildReaderPages } from "../books/util/build-reader-pages";
-import { VerifyBookPasswordDto } from "./dto/verify-book-password.dto";
 import { RecordBookEventDto } from "./dto/record-book-event.dto";
-import { RateLimitService } from "../../common/rate-limit/rate-limit.service";
+import { VerifyBookPasswordDto } from "./dto/verify-book-password.dto";
+import { DASHBOARD_SESSION_COOKIE, readCookie } from "../../common/auth/session-cookie";
 
 const BOOK_ACCESS_TOKEN_TYP = "book_access";
-const BOOK_ACCESS_TOKEN_TTL_SECONDS = Number(process.env.BOOK_ACCESS_TOKEN_TTL_SECONDS ?? 12 * 60 * 60);
+const BOOK_ACCESS_TOKEN_TTL_SECONDS = Number(process.env.BOOK_ACCESS_TOKEN_TTL_SECONDS ?? 4 * 60 * 60);
+const OWNER_READER_TOKEN_TTL_SECONDS = Number(process.env.OWNER_READER_TOKEN_TTL_SECONDS ?? 10 * 60);
 const PASSWORD_MAX_ATTEMPTS = Number(process.env.BOOK_PASSWORD_MAX_ATTEMPTS ?? 8);
+const PASSWORD_IP_MAX_ATTEMPTS = Number(process.env.BOOK_PASSWORD_IP_MAX_ATTEMPTS ?? 32);
 const PASSWORD_LOCK_MINUTES = Number(process.env.BOOK_PASSWORD_LOCKOUT_MINUTES ?? 15);
+
+type ReaderScope = "public" | "password" | "owner";
 
 interface PublicBookRow {
   book_id: string;
@@ -43,8 +49,6 @@ interface PublicBookRow {
   has_password: boolean;
   password_hash: string | null;
   access_epoch: number;
-  failed_attempts: number;
-  locked_until: string | null;
   published_revision_id: string;
   manifest_key: string;
   visibility: "public" | "private";
@@ -55,14 +59,15 @@ interface PublicBookRow {
 }
 
 interface BookAccessTokenPayload {
-  typ: string;
+  typ: typeof BOOK_ACCESS_TOKEN_TYP;
   bookId: string;
+  revisionId: string;
   accessEpoch: number;
+  scope: ReaderScope;
+  sessionId: string;
+  actorUserId?: string;
 }
 
-// JWT dang nhap Creator/Admin thuong (xem apps/api/src/common/auth/jwt-payload.interface.ts)
-// - KHONG co claim `typ`, khac han BookAccessTokenPayload. Route nay khong dung
-// DbContextInterceptor nen tu xac minh + tra cuu rieng qua auth_lookup_user_by_id.
 interface LoginTokenPayload {
   sub: string;
   email: string;
@@ -74,27 +79,19 @@ interface Actor {
   isAdmin: boolean;
 }
 
+interface ReadGrant {
+  book: PublicBookRow;
+  revisionId: string;
+  manifestKey: string;
+  readerToken: string;
+  sessionId: string;
+}
+
 /**
- * Doc sach cong khai (khong dang nhap) - KHONG dung DbContextInterceptor (doi hoi JWT
- * dang nhap Creator/Admin). Moi truy van di qua ham SECURITY DEFINER trong
- * infra/migrations/0006_public_reader.sql + 0007_book_password_protection.sql, tu
- * gioi han chi tra ve du lieu cua sach da publish va khong bao gio lo source_pdf
- * (tru dung endpoint /download khi allow_download=true, kiem tra ca 2 tang).
- *
- * F05 (mat khau xem): sach co password_hash bi chan (403, kem { passwordRequired: true }
- * de FE phan biet voi 403/404 thuong) tru khi kem mot "book access token" hop le - JWT
- * rieng (khac JWT dang nhap Nguoi tao/Admin, phan biet bang claim typ='book_access')
- * cap qua POST .../verify-password sau khi nhap dung mat khau. Token nhung ca
- * access_epoch tai thoi diem cap; doi/xoa mat khau lam epoch tang len -> token cu tu
- * dong het hieu luc ma khong can blacklist rieng.
- *
- * F16 (Publish/Private tren sach da publish): cung slot Bearer token/`?token=` co the
- * mang JWT DANG NHAP thuong (Creator/Admin, khong co claim `typ`) thay vi book access
- * token - dung de sach Private van xem duoc qua CHINH permalink cu neu la owner hoac
- * system admin. Private la lop chan CAO HON F05: khi visibility='private', bo qua
- * hoan toan kiem tra mat khau (khong cong don 2 lop, da chot voi nguoi dung), chi con
- * owner/admin duoc vao; Admin xem sach Private khong phai cua minh BAT BUOC ghi
- * audit_logs (khong ngoai le).
+ * Public reader endpoints intentionally do not run DbContextInterceptor. Every
+ * database access therefore uses a narrowly scoped SECURITY DEFINER function. The
+ * reader JWT is never a dashboard JWT: it can read one book/revision only, has a
+ * short expiry, carries an access epoch, and cannot authenticate any admin route.
  */
 @Controller("public/books")
 export class PublicBooksController {
@@ -107,7 +104,7 @@ export class PublicBooksController {
 
   private parsePermalink(permalink: string): { slug: string; suffix: string } {
     const lastDash = permalink.lastIndexOf("-");
-    if (lastDash < 0 || permalink.length - lastDash - 1 !== 8) {
+    if (lastDash < 1 || permalink.length - lastDash - 1 !== 8) {
       throw new NotFoundException("Link khong hop le.");
     }
     return { slug: permalink.slice(0, lastDash), suffix: permalink.slice(lastDash + 1) };
@@ -115,28 +112,27 @@ export class PublicBooksController {
 
   private extractToken(req: Request, queryToken?: string): string | undefined {
     const header = req.headers.authorization;
-    if (header?.startsWith("Bearer ")) {
-      return header.slice("Bearer ".length);
-    }
-    return queryToken || undefined;
+    if (header?.startsWith("Bearer ")) return header.slice("Bearer ".length);
+    // Query tokens are scoped reader grants, therefore they take precedence over
+    // a Dashboard cookie when a password reader also happens to be logged in.
+    return queryToken || readCookie(req, DASHBOARD_SESSION_COOKIE);
   }
 
-  private async hasValidAccessToken(token: string | undefined, book: PublicBookRow): Promise<boolean> {
-    if (!token) return false;
-    try {
-      const payload = await this.jwtService.verifyAsync<BookAccessTokenPayload>(token);
-      return payload.typ === BOOK_ACCESS_TOKEN_TYP && payload.bookId === book.book_id && payload.accessEpoch === book.access_epoch;
-    } catch {
-      return false;
-    }
+  private async findPublishedBook(permalink: string): Promise<PublicBookRow> {
+    const { slug, suffix } = this.parsePermalink(permalink);
+    const { rows } = await this.pool.query<PublicBookRow>("SELECT * FROM public_get_book($1,$2)", [slug, suffix]);
+    if (!rows[0]) throw new NotFoundException("Khong tim thay sach, hoac sach chua duoc publish.");
+    return rows[0];
   }
 
-  /**
-   * F16: token gui len co phai JWT dang nhap Creator/Admin THAT khong (chu ky hop le,
-   * KHONG co claim `typ` - phan biet voi book access token). Neu dung, tra cuu lai
-   * is_system_admin/status TU DATABASE (khong bao gio tin claim trong token - giong
-   * dung nguyen tac DbContextInterceptor dang dung cho route co dang nhap thuong).
-   */
+  private async getReadyRevision(book: PublicBookRow, revisionId: string): Promise<string | null> {
+    const { rows } = await this.pool.query<{ manifest_key: string }>("SELECT * FROM public_get_ready_revision($1,$2)", [
+      book.book_id,
+      revisionId,
+    ]);
+    return rows[0]?.manifest_key ?? null;
+  }
+
   private async resolveActor(token: string | undefined): Promise<Actor | null> {
     if (!token) return null;
     let payload: LoginTokenPayload;
@@ -146,113 +142,205 @@ export class PublicBooksController {
       return null;
     }
     if (!payload.sub || payload.typ) return null;
+    return this.resolveActorById(payload.sub);
+  }
+
+  private async resolveActorById(userId: string): Promise<Actor | null> {
     const { rows } = await this.pool.query<{ is_system_admin: boolean; status: string }>(
       "SELECT is_system_admin, status FROM auth_lookup_user_by_id($1)",
-      [payload.sub]
+      [userId]
     );
-    if (rows.length === 0 || rows[0].status !== "active") return null;
-    return { userId: payload.sub, isAdmin: rows[0].is_system_admin };
+    if (!rows[0] || rows[0].status !== "active") return null;
+    return { userId, isAdmin: rows[0].is_system_admin };
   }
 
-  private async findPublishedBook(permalink: string): Promise<PublicBookRow> {
-    const { slug, suffix } = this.parsePermalink(permalink);
-    const { rows } = await this.pool.query("SELECT * FROM public_get_book($1,$2)", [slug, suffix]);
-    if (rows.length === 0) {
-      throw new NotFoundException("Khong tim thay sach, hoac sach chua duoc publish.");
-    }
-    return rows[0];
-  }
-
-  /**
-   * SEC-02 (audit codex 21/09/2026): "la owner" truoc day chi so sanh users.id, khong
-   * xet memberships.status trong dung tenant cua sach - Creator bi Admin thu hoi
-   * membership (disable) van doc duoc sach Private cua minh vi tai khoan (users.status)
-   * van active. Owner phai co CA users.status active LAN membership active trong tenant
-   * cua sach; mat 1 trong 2 dieu kien la mat quyen owner ngay o request ke tiep (khong
-   * doi JWT het han - dung nguyen tac "revoke phai co hieu luc ngay" trong REMEDIATION.md).
-   * Khong kiem tra tenants.status o day: theo quyet dinh voi nguoi dung (2026-09-21),
-   * suspend tenant chi chan Dashboard/API quan tri (xem DbContextInterceptor), khong
-   * chan public reader - sach da publish cua tenant suspended van doc duoc binh thuong.
-   */
   private async isActiveOwner(actor: Actor | null, book: PublicBookRow): Promise<boolean> {
-    if (actor === null || actor.userId !== book.owner_id) return false;
+    if (!actor || actor.userId !== book.owner_id) return false;
     const { rows } = await this.pool.query<{ status: string | null }>(
       "SELECT public_lookup_membership_status($1,$2) AS status",
       [book.tenant_id, actor.userId]
     );
-    return rows.length > 0 && rows[0].status === "active";
+    return rows[0]?.status === "active";
   }
 
-  /** Tra ve sach da publish, da xac nhan quyen xem (F16 Private > F05 mat khau > cong khai). */
-  private async getAuthorizedBook(permalink: string, token: string | undefined): Promise<PublicBookRow> {
+  private isProtectedBook(book: PublicBookRow): boolean {
+    return book.visibility === "private" || !!book.password_hash;
+  }
+
+  private setResponseHeaders(res: Response, book: PublicBookRow): void {
+    // Prevent stale public data surviving a public -> password/private change.
+    // Existing CDN/browser entries from before this release must be purged on deploy.
+    res.setHeader("Cache-Control", this.isProtectedBook(book) ? "private, no-store" : "public, max-age=0, must-revalidate");
+    res.setHeader("Vary", "Authorization");
+    res.setHeader("Referrer-Policy", "no-referrer");
+    res.setHeader("Cross-Origin-Resource-Policy", "same-site");
+  }
+
+  private parseSingleByteRange(value: string | undefined, size: number): { start: number; end: number } | "invalid" | null {
+    if (!value) return null;
+    if (!value.startsWith("bytes=") || value.includes(",") || size < 1) return "invalid";
+    const match = /^bytes=(\d*)-(\d*)$/.exec(value);
+    if (!match || (!match[1] && !match[2])) return "invalid";
+    const [, startText, endText] = match;
+    if (!startText) {
+      const suffixLength = Number(endText);
+      if (!Number.isSafeInteger(suffixLength) || suffixLength < 1) return "invalid";
+      return { start: Math.max(0, size - suffixLength), end: size - 1 };
+    }
+    const start = Number(startText);
+    const requestedEnd = endText ? Number(endText) : size - 1;
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(requestedEnd) || start < 0 || start >= size || requestedEnd < start) {
+      return "invalid";
+    }
+    return { start, end: Math.min(requestedEnd, size - 1) };
+  }
+
+  private async streamWithRange(
+    req: Request,
+    res: Response,
+    objectKey: string,
+    contentType: string
+  ): Promise<StreamableFile | { statusCode: number; message: string }> {
+    const size = await this.storage.getSize(objectKey);
+    const range = this.parseSingleByteRange(req.headers.range, size);
+    res.setHeader("Accept-Ranges", "bytes");
+    res.setHeader("Content-Type", contentType);
+    if (range === "invalid") {
+      res.status(HttpStatus.REQUESTED_RANGE_NOT_SATISFIABLE);
+      res.setHeader("Content-Range", `bytes */${size}`);
+      return { statusCode: HttpStatus.REQUESTED_RANGE_NOT_SATISFIABLE, message: "Byte range khong hop le." };
+    }
+    if (range) {
+      const length = range.end - range.start + 1;
+      res.status(HttpStatus.PARTIAL_CONTENT);
+      res.setHeader("Content-Range", `bytes ${range.start}-${range.end}/${size}`);
+      res.setHeader("Content-Length", String(length));
+      return new StreamableFile(this.storage.createReadStream(objectKey, { start: range.start, end: range.end }));
+    }
+    res.setHeader("Content-Length", String(size));
+    return new StreamableFile(this.storage.createReadStream(objectKey));
+  }
+
+  private async issueReadGrant(book: PublicBookRow, scope: ReaderScope, actorUserId?: string): Promise<ReadGrant> {
+    const revisionId = book.published_revision_id;
+    const manifestKey = await this.getReadyRevision(book, revisionId);
+    if (!manifestKey) throw new NotFoundException("Revision da publish khong con san sang.");
+    const sessionId = randomUUID();
+    const expiresIn = scope === "owner" ? OWNER_READER_TOKEN_TTL_SECONDS : BOOK_ACCESS_TOKEN_TTL_SECONDS;
+    const readerToken = await this.jwtService.signAsync(
+      {
+        typ: BOOK_ACCESS_TOKEN_TYP,
+        bookId: book.book_id,
+        revisionId,
+        accessEpoch: book.access_epoch,
+        scope,
+        sessionId,
+        ...(scope === "owner" ? { actorUserId } : {}),
+      } satisfies BookAccessTokenPayload,
+      { expiresIn }
+    );
+    return { book, revisionId, manifestKey, readerToken, sessionId };
+  }
+
+  /** Validate a scoped reader token, including immediate membership revocation. */
+  private async getReadGrantFromToken(book: PublicBookRow, token: string | undefined): Promise<ReadGrant | null> {
+    if (!token) return null;
+    let payload: BookAccessTokenPayload;
+    try {
+      payload = await this.jwtService.verifyAsync<BookAccessTokenPayload>(token);
+    } catch {
+      return null;
+    }
+    if (
+      payload.typ !== BOOK_ACCESS_TOKEN_TYP ||
+      payload.bookId !== book.book_id ||
+      payload.accessEpoch !== book.access_epoch ||
+      !["public", "password", "owner"].includes(payload.scope) ||
+      !payload.revisionId ||
+      !payload.sessionId
+    ) {
+      return null;
+    }
+    if (payload.scope === "public" && this.isProtectedBook(book)) return null;
+    if (payload.scope === "password" && (book.visibility !== "public" || !book.password_hash)) return null;
+    if (payload.scope === "owner") {
+      if (!payload.actorUserId) return null;
+      const actor = await this.resolveActorById(payload.actorUserId);
+      if (!actor || (!actor.isAdmin && !(await this.isActiveOwner(actor, book)))) return null;
+    }
+    const manifestKey = await this.getReadyRevision(book, payload.revisionId);
+    if (!manifestKey) return null;
+    return { book, revisionId: payload.revisionId, manifestKey, readerToken: token, sessionId: payload.sessionId };
+  }
+
+  /**
+   * A dashboard JWT is accepted only once to prove owner/admin access, then exchanged
+   * for a least-privilege reader token. It is never used in asset/download URLs.
+   */
+  private async getAuthorizedRead(permalink: string, token: string | undefined): Promise<ReadGrant> {
     const book = await this.findPublishedBook(permalink);
+    const existing = await this.getReadGrantFromToken(book, token);
+    if (existing) return existing;
+
     const actor = await this.resolveActor(token);
     const isOwner = await this.isActiveOwner(actor, book);
+    const canManage = !!actor && (actor.isAdmin || isOwner);
 
     if (book.visibility === "private") {
-      if (!isOwner && !actor?.isAdmin) {
+      if (!canManage) {
         throw new ForbiddenException({
           statusCode: 403,
           privateBook: true,
           message: "Sach nay dang o che do rieng tu, chi chu so huu moi xem duoc.",
         });
       }
-      if (!isOwner && actor?.isAdmin) {
-        // Da chot voi nguoi dung: KHONG co ngoai le, moi lan Admin xem sach Private
-        // khong phai cua minh deu phai ghi audit_logs.
-        await this.pool.query("SELECT public_record_admin_private_view($1,$2,$3)", [
-          actor.userId,
-          book.tenant_id,
-          book.book_id,
-        ]);
+      if (actor!.isAdmin && !isOwner) {
+        await this.pool.query("SELECT public_record_admin_private_view($1,$2,$3)", [actor!.userId, book.tenant_id, book.book_id]);
       }
-      // Private la lop chan cao nhat: bo qua kiem tra mat khau F05 ben duoi hoan toan
-      // (khong cong don 2 lop bao ve, da chot voi nguoi dung).
-      return book;
+      return this.issueReadGrant(book, "owner", actor!.userId);
     }
 
-    if (book.password_hash && !isOwner && !(await this.hasValidAccessToken(token, book))) {
-      throw new ForbiddenException({
-        statusCode: 403,
-        passwordRequired: true,
-        message: "Sach nay yeu cau mat khau de xem.",
-      });
+    if (book.password_hash) {
+      if (!canManage) {
+        throw new ForbiddenException({
+          statusCode: 403,
+          passwordRequired: true,
+          message: "Sach nay yeu cau mat khau de xem.",
+        });
+      }
+      return this.issueReadGrant(book, "owner", actor!.userId);
     }
-    return book;
+    return this.issueReadGrant(book, "public");
   }
 
-  /**
-   * SEC-01 (audit codex 21/09/2026): sach co mat khau/Private van la "protected
-   * content" - KHONG duoc de shared/browser cache giu lai response, du header
-   * Cache-Control cu lap luan rang assetId la UUID ngau nhien nen "an toan". UUID
-   * kho doan khong phai la authorization: API van nhan Bearer token/`?token=` cho
-   * cung URL, nen mot proxy cache dat truoc API co the phuc vu lai byte cua nguoi
-   * co quyen cho nguoi khac gui đúng URL (khong kem token) sau khi mat khau/quyen
-   * bi doi. Sach cong khai thuc su (khong mat khau, khong Private) van duoc cache
-   * binh thuong de giu hieu nang.
-   */
-  private isProtectedBook(book: PublicBookRow): boolean {
-    return book.visibility === "private" || !!book.password_hash;
+  @Get(":permalink/metadata")
+  async getMetadata(@Param("permalink") permalink: string, @Res({ passthrough: true }) res: Response) {
+    const book = await this.findPublishedBook(permalink);
+    this.setResponseHeaders(res, book);
+    if (this.isProtectedBook(book)) return { title: "MISA Flipbook", hasPreviewImage: false };
+    const custom = await this.pool.query("SELECT * FROM public_get_share_thumbnail($1)", [book.book_id]);
+    const fallback = await this.pool.query("SELECT id FROM public_list_revision_page_assets($1,$2) WHERE kind = 'thumbnail' LIMIT 1", [
+      book.book_id,
+      book.published_revision_id,
+    ]);
+    return { title: book.title, hasPreviewImage: custom.rowCount! > 0 || fallback.rowCount! > 0 };
   }
 
-  private setCacheHeader(res: Response, book: PublicBookRow, publicCacheControl: string): void {
-    res.setHeader("Cache-Control", this.isProtectedBook(book) ? "private, no-store" : publicCacheControl);
-  }
-
-  /** F12: ghi 1 event 'open'/'page_view' qua ham SECURITY DEFINER (route nay khong co
-   * DbContextInterceptor nen khong the INSERT truc tiep qua RLS thuong). Loi ghi nhan
-   * KHONG BAO GIO duoc lam hong luong doc sach chinh - chi log, nuot loi. */
-  private async recordEvent(book: PublicBookRow, eventType: "open" | "page_view") {
-    try {
-      await this.pool.query("SELECT public_record_book_event($1,$2,$3,$4)", [
-        book.book_id,
-        book.tenant_id,
-        book.published_revision_id,
-        eventType,
-      ]);
-    } catch {
-      // Thong ke la phu, khong chan nguoi doc neu ghi nhan that bai.
-    }
+  @Get(":permalink/preview-image")
+  async getPreviewImage(@Param("permalink") permalink: string, @Res({ passthrough: true }) res: Response) {
+    const book = await this.findPublishedBook(permalink);
+    if (this.isProtectedBook(book)) throw new NotFoundException("Khong co anh xem truoc.");
+    const custom = await this.pool.query<{ object_key: string; content_type: string }>("SELECT * FROM public_get_share_thumbnail($1)", [book.book_id]);
+    const fallback = custom.rows[0]
+      ? custom.rows
+      : (await this.pool.query<{ object_key: string; content_type: string }>(
+          "SELECT object_key, content_type FROM public_list_revision_page_assets($1,$2) WHERE kind = 'thumbnail' LIMIT 1",
+          [book.book_id, book.published_revision_id]
+        )).rows;
+    if (!fallback[0]) throw new NotFoundException("Khong co anh xem truoc.");
+    res.setHeader("Content-Type", fallback[0].content_type);
+    this.setResponseHeaders(res, book);
+    return new StreamableFile(this.storage.createReadStream(fallback[0].object_key));
   }
 
   @Get(":permalink")
@@ -262,26 +350,21 @@ export class PublicBooksController {
     @Res({ passthrough: true }) res: Response,
     @Query("token") tokenQuery?: string
   ) {
-    const book = await this.getAuthorizedBook(permalink, this.extractToken(req, tokenQuery));
-    this.setCacheHeader(res, book, "public, max-age=60");
-    const manifest = JSON.parse((await this.storage.readBuffer(book.manifest_key)).toString("utf8"));
-    const assetsRes = await this.pool.query("SELECT * FROM public_list_page_assets($1,$2)", [
-      book.book_id,
-      book.published_revision_id,
-    ]);
-    await this.recordEvent(book, "open");
+    const grant = await this.getAuthorizedRead(permalink, this.extractToken(req, tokenQuery));
+    this.setResponseHeaders(res, grant.book);
+    const manifest = JSON.parse((await this.storage.readBuffer(grant.manifestKey)).toString("utf8"));
+    const assetsRes = await this.pool.query("SELECT * FROM public_list_revision_page_assets($1,$2)", [grant.book.book_id, grant.revisionId]);
     return {
-      title: book.title,
-      permalink: `${book.permalink_slug}-${book.permalink_suffix}`,
-      allowDownload: book.allow_download,
-      hasBackground: !!book.background_object_key,
-      // F06: uu tien GA4 ID rieng cua sach, khong co thi dung mac dinh cua tenant.
-      gaId: book.ga_id ?? book.default_ga_id ?? null,
+      title: grant.book.title,
+      permalink: `${grant.book.permalink_slug}-${grant.book.permalink_suffix}`,
+      allowDownload: grant.book.allow_download,
+      hasBackground: !!grant.book.background_object_key,
+      gaId: grant.book.ga_id ?? grant.book.default_ga_id ?? null,
+      readerToken: grant.readerToken,
       pages: buildReaderPages(manifest, assetsRes.rows),
     };
   }
 
-  /** F15: anh nen backdrop cong khai - cung 1 kiem tra quyen xem nhu trang/tai xuong. */
   @Get(":permalink/background")
   async getBackground(
     @Param("permalink") permalink: string,
@@ -289,13 +372,11 @@ export class PublicBooksController {
     @Res({ passthrough: true }) res: Response,
     @Query("token") tokenQuery?: string
   ) {
-    const book = await this.getAuthorizedBook(permalink, this.extractToken(req, tokenQuery));
-    if (!book.background_object_key) {
-      throw new NotFoundException("Sach nay khong co anh nen.");
-    }
-    res.setHeader("Content-Type", book.background_content_type ?? "application/octet-stream");
-    this.setCacheHeader(res, book, "public, max-age=3600");
-    return new StreamableFile(this.storage.createReadStream(book.background_object_key));
+    const grant = await this.getAuthorizedRead(permalink, this.extractToken(req, tokenQuery));
+    if (!grant.book.background_object_key) throw new NotFoundException("Sach nay khong co anh nen.");
+    res.setHeader("Content-Type", grant.book.background_content_type ?? "application/octet-stream");
+    this.setResponseHeaders(res, grant.book);
+    return new StreamableFile(this.storage.createReadStream(grant.book.background_object_key));
   }
 
   @Get(":permalink/assets/:assetId")
@@ -306,22 +387,17 @@ export class PublicBooksController {
     @Res({ passthrough: true }) res: Response,
     @Query("token") tokenQuery?: string
   ) {
-    const book = await this.getAuthorizedBook(permalink, this.extractToken(req, tokenQuery));
-    const { rows } = await this.pool.query("SELECT * FROM public_get_page_asset($1,$2)", [
-      book.book_id,
+    const grant = await this.getAuthorizedRead(permalink, this.extractToken(req, tokenQuery));
+    const { rows } = await this.pool.query<{ object_key: string; content_type: string }>("SELECT * FROM public_get_revision_page_asset($1,$2,$3)", [
+      grant.book.book_id,
+      grant.revisionId,
       assetId,
     ]);
-    if (rows.length === 0) {
-      throw new NotFoundException("Khong tim thay anh.");
-    }
-    res.setHeader("Content-Type", rows[0].content_type);
-    // Anh trang bat bien theo revision, nhung "kho doan URL" khong phai la authorization
-    // (xem isProtectedBook) - chi cache cong khai/immutable khi sach thuc su cong khai.
-    this.setCacheHeader(res, book, "public, max-age=3600, immutable");
-    return new StreamableFile(this.storage.createReadStream(rows[0].object_key));
+    if (!rows[0]) throw new NotFoundException("Khong tim thay tai nguyen cua sach.");
+    this.setResponseHeaders(res, grant.book);
+    return this.streamWithRange(req, res, rows[0].object_key, rows[0].content_type);
   }
 
-  /** F11: tai PDF goc - kiem tra ca token (neu co password) LAN allow_download, ca 2 tang. */
   @Get(":permalink/download")
   async download(
     @Param("permalink") permalink: string,
@@ -329,96 +405,76 @@ export class PublicBooksController {
     @Res({ passthrough: true }) res: Response,
     @Query("token") tokenQuery?: string
   ) {
-    const book = await this.getAuthorizedBook(permalink, this.extractToken(req, tokenQuery));
-    if (!book.allow_download) {
-      throw new ForbiddenException("Sach nay khong cho phep tai xuong PDF goc.");
-    }
-    const { rows } = await this.pool.query("SELECT * FROM public_get_source_pdf($1,$2)", [
-      book.book_id,
-      book.published_revision_id,
+    const grant = await this.getAuthorizedRead(permalink, this.extractToken(req, tokenQuery));
+    if (!grant.book.allow_download) throw new ForbiddenException("Sach nay khong cho phep tai xuong PDF goc.");
+    const { rows } = await this.pool.query<{ object_key: string; content_type: string; file_name_hint: string }>("SELECT * FROM public_get_revision_source_pdf($1,$2)", [
+      grant.book.book_id,
+      grant.revisionId,
     ]);
-    if (rows.length === 0) {
-      // Tang SQL (0007) cung kiem tra allow_download=true - neu khong khop (vd bug
-      // tang tren, hoac vua tat download giua chung) thi tu choi thay vi lo file.
-      throw new ForbiddenException("Sach nay khong cho phep tai xuong PDF goc.");
-    }
-    res.setHeader("Content-Type", "application/pdf");
+    if (!rows[0]) throw new ForbiddenException("Sach nay khong cho phep tai xuong PDF goc.");
     res.setHeader("Content-Disposition", `attachment; filename="${rows[0].file_name_hint}"`);
-    this.setCacheHeader(res, book, "public, max-age=3600");
-    return new StreamableFile(this.storage.createReadStream(rows[0].object_key));
+    this.setResponseHeaders(res, grant.book);
+    return this.streamWithRange(req, res, rows[0].object_key, "application/pdf");
   }
 
-  /** F12: FE goi 1 lan moi khi lat sang trang moi (xem PageView trong FlipBook.tsx) -
-   * dung lai getAuthorizedBook nen tu chan giong het cac endpoint khac (Private/mat khau),
-   * khong dem luot xem tu nguoi khong xem duoc sach. */
   @Post(":permalink/events")
-  async recordPageEvent(
+  async recordReaderEvent(
     @Param("permalink") permalink: string,
     @Req() req: Request,
     @Body() dto: RecordBookEventDto,
     @Query("token") tokenQuery?: string
   ) {
-    const book = await this.getAuthorizedBook(permalink, this.extractToken(req, tokenQuery));
-    await this.recordEvent(book, dto.eventType);
-    return { ok: true };
+    const book = await this.findPublishedBook(permalink);
+    const grant = await this.getReadGrantFromToken(book, this.extractToken(req, tokenQuery));
+    if (!grant) throw new ForbiddenException("Phien doc khong hop le hoac da het han.");
+    const pageNumber = dto.eventType === "open" ? 0 : dto.page!;
+    const { rows } = await this.pool.query<{ public_record_reader_event: boolean }>("SELECT public_record_reader_event($1,$2,$3,$4,$5,$6)", [
+      grant.book.book_id,
+      grant.book.tenant_id,
+      grant.revisionId,
+      grant.sessionId,
+      dto.eventType,
+      pageNumber,
+    ]);
+    return { ok: true, counted: rows[0]?.public_record_reader_event ?? false };
   }
 
-  /**
-   * F05 + SEC-03 (audit codex 21/09/2026): nhap mat khau -> tra ve "book access token"
-   * (JWT ngan han) neu dung.
-   *
-   * Truoc day khoa theo book_settings.locked_until (1 bo dem CHUNG cho ca sach) - mot
-   * nguon nhap sai 8 lan khoa CA nguoi khac dang nhap dung mat khau tren cung sach
-   * (evidence EVIDENCE.md: "8 password sai... 429; nhap dung tiep theo cung 429").
-   * Chuyen sang khoa theo (book_id, ip) qua RateLimitService (Redis, atomic) - mot
-   * nguon bi khoa khong anh huong nguon khac. Check truoc ca argon2.verify de tranh
-   * ton chi phi hash khi da biet chac se tu choi (REMEDIATION.md muc 3).
-   * public_record_password_attempt (DB) van duoc goi de giu thong ke tong hop cho
-   * Admin sau nay, KHONG con dung ket qua cua no de quyet dinh chan/cho.
-   */
   @Post(":permalink/verify-password")
-  async verifyPassword(
-    @Param("permalink") permalink: string,
-    @Body() dto: VerifyBookPasswordDto,
-    @Req() req: Request
-  ) {
+  async verifyPassword(@Param("permalink") permalink: string, @Body() dto: VerifyBookPasswordDto, @Req() req: Request) {
     const book = await this.findPublishedBook(permalink);
-    if (!book.password_hash) {
-      throw new BadRequestException("Sach nay khong dat mat khau.");
-    }
-
-    const rlKey = `bookpw:${book.book_id}:${req.ip}`;
-    const rl = await this.rateLimit.consume(rlKey, PASSWORD_MAX_ATTEMPTS, PASSWORD_LOCK_MINUTES * 60);
-    if (!rl.allowed) {
+    if (book.visibility === "private" || !book.password_hash) throw new BadRequestException("Sach nay khong nhan mat khau o che do hien tai.");
+    const windowSeconds = PASSWORD_LOCK_MINUTES * 60;
+    const sourceKey = `bookpw-ip:${rateLimitKeyPart(`book-password-source:${req.ip}`)}`;
+    const bookKey = `bookpw:${book.book_id}:${rateLimitKeyPart(`book-password:${req.ip}`)}`;
+    // A book/IP cap avoids one reader locking everyone out. The source cap also
+    // stops a single client spraying a password over many public books.
+    const sourceResult = await this.rateLimit.consume(sourceKey, PASSWORD_IP_MAX_ATTEMPTS, windowSeconds);
+    if (!sourceResult.allowed) {
       throw new HttpException(
         {
           statusCode: HttpStatus.TOO_MANY_REQUESTS,
-          message: `Da nhap sai qua nhieu lan. Thu lai sau khoang ${Math.ceil(rl.retryAfterSeconds / 60)} phut.`,
-          retryAfterSeconds: rl.retryAfterSeconds,
+          message: `Da co qua nhieu lan thu mat khau tu ket noi nay. Thu lai sau khoang ${Math.ceil(sourceResult.retryAfterSeconds / 60)} phut.`,
+          retryAfterSeconds: sourceResult.retryAfterSeconds,
         },
         HttpStatus.TOO_MANY_REQUESTS
       );
     }
-
-    const ok = await argon2.verify(book.password_hash, dto.password).catch(() => false);
-    await this.pool
-      .query("SELECT public_record_password_attempt($1,$2,$3,$4)", [
-        book.book_id,
-        ok,
-        PASSWORD_MAX_ATTEMPTS,
-        PASSWORD_LOCK_MINUTES,
-      ])
-      .catch(() => undefined);
-
-    if (!ok) {
-      throw new UnauthorizedException(`Sai mat khau. Con toi da ${rl.remaining} lan thu tu dia chi nay.`);
+    const bookResult = await this.rateLimit.consume(bookKey, PASSWORD_MAX_ATTEMPTS, windowSeconds);
+    if (!bookResult.allowed) {
+      throw new HttpException(
+        {
+          statusCode: HttpStatus.TOO_MANY_REQUESTS,
+          message: `Da nhap sai qua nhieu lan. Thu lai sau khoang ${Math.ceil(bookResult.retryAfterSeconds / 60)} phut.`,
+          retryAfterSeconds: bookResult.retryAfterSeconds,
+        },
+        HttpStatus.TOO_MANY_REQUESTS
+      );
     }
-    await this.rateLimit.reset(rlKey);
-
-    const accessToken = await this.jwtService.signAsync(
-      { typ: BOOK_ACCESS_TOKEN_TYP, bookId: book.book_id, accessEpoch: book.access_epoch } satisfies BookAccessTokenPayload,
-      { expiresIn: BOOK_ACCESS_TOKEN_TTL_SECONDS }
-    );
-    return { accessToken, expiresIn: BOOK_ACCESS_TOKEN_TTL_SECONDS };
+    const ok = await argon2.verify(book.password_hash, dto.password).catch(() => false);
+    await this.pool.query("SELECT public_record_password_attempt($1,$2,$3,$4)", [book.book_id, ok, PASSWORD_MAX_ATTEMPTS, PASSWORD_LOCK_MINUTES]).catch(() => undefined);
+    if (!ok) throw new UnauthorizedException(`Sai mat khau. Con toi da ${bookResult.remaining} lan thu tu dia chi nay.`);
+    await Promise.all([this.rateLimit.reset(bookKey), this.rateLimit.reset(sourceKey)]);
+    const grant = await this.issueReadGrant(book, "password");
+    return { readerToken: grant.readerToken, expiresIn: BOOK_ACCESS_TOKEN_TTL_SECONDS };
   }
 }

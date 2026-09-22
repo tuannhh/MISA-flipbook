@@ -8,6 +8,14 @@ interface ManifestPage {
   height_pt: number;
   rotation: number;
   links: unknown[];
+  media?: ManifestMedia[];
+}
+
+interface ManifestMedia {
+  kind: "audio" | "video";
+  content_type: string;
+  path: string;
+  rect_norm: number[];
 }
 
 interface Manifest {
@@ -18,6 +26,14 @@ interface AssetRow {
   id: string;
   kind: string;
   object_key: string;
+  content_type?: string;
+}
+
+export interface ReaderMedia {
+  kind: "audio" | "video";
+  contentType: string;
+  rectNorm: number[];
+  mediaAssetId: string | null;
 }
 
 export interface ReaderPage {
@@ -26,6 +42,7 @@ export interface ReaderPage {
   heightPt: number;
   rotation: number;
   links: unknown[];
+  media: ReaderMedia[];
   imageAssetId: string | null;
   thumbAssetId: string | null;
 }
@@ -47,6 +64,13 @@ export function buildReaderPages(manifest: Manifest, assetRows: AssetRow[]): Rea
     }
     byPage.set(pageNum, entry);
   }
+  const mediaByPath = new Map<string, AssetRow>();
+  for (const row of assetRows) {
+    if (row.kind !== "media") continue;
+    const marker = "/media/";
+    const markerIndex = row.object_key.lastIndexOf(marker);
+    if (markerIndex >= 0) mediaByPath.set(row.object_key.slice(markerIndex + 1), row);
+  }
 
   return manifest.pages.map((p) => {
     const ids = byPage.get(p.page) ?? { imageAssetId: null, thumbAssetId: null };
@@ -56,6 +80,27 @@ export function buildReaderPages(manifest: Manifest, assetRows: AssetRow[]): Rea
       heightPt: p.height_pt,
       rotation: p.rotation,
       links: p.links,
+      media: (p.media ?? []).flatMap((media) => {
+        if (
+          (media.kind !== "audio" && media.kind !== "video") ||
+          typeof media.content_type !== "string" ||
+          typeof media.path !== "string" ||
+          !Array.isArray(media.rect_norm) ||
+          media.rect_norm.length !== 4 ||
+          media.rect_norm.some((value) => typeof value !== "number" || !Number.isFinite(value))
+        ) {
+          return [];
+        }
+        const asset = mediaByPath.get(media.path);
+        return [
+          {
+            kind: media.kind,
+            contentType: media.content_type,
+            rectNorm: media.rect_norm,
+            mediaAssetId: asset?.id ?? null,
+          },
+        ];
+      }),
       imageAssetId: ids.imageAssetId,
       thumbAssetId: ids.thumbAssetId,
     };

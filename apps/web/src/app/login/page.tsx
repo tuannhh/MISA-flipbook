@@ -1,5 +1,5 @@
 "use client";
-import { FormEvent, ReactNode, useState } from "react";
+import { FormEvent, ReactNode, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { apiFetch, ApiError } from "@/lib/api";
@@ -37,17 +37,41 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [memberships, setMemberships] = useState<Membership[] | null>(null);
 
+  useEffect(() => {
+    let cancelled = false;
+    void apiFetch<Me>("/me")
+      .then((me) => {
+        if (cancelled) return;
+        setIsAdmin(me.isSystemAdmin);
+        const activeMemberships = me.memberships.filter((membership) => membership.status === "active");
+        if (activeMemberships.length === 0) {
+          if (me.isSystemAdmin) router.replace("/admin");
+          return;
+        }
+        if (activeMemberships.length === 1) {
+          setTenantId(activeMemberships[0].tenantId);
+          router.replace("/dashboard");
+          return;
+        }
+        setMemberships(activeMemberships);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [router]);
+
   async function handleLogin(e: FormEvent) {
     e.preventDefault();
     setError(null);
     setLoading(true);
     try {
-      const { accessToken } = await apiFetch<{ accessToken: string }>("/auth/login", {
+      await apiFetch("/auth/login", {
         method: "POST",
         body: { email, password },
       });
-      setToken(accessToken);
-      const me = await apiFetch<Me>("/me", { token: accessToken });
+      setToken();
+      const me = await apiFetch<Me>("/me");
       setIsAdmin(me.isSystemAdmin);
       const activeMemberships = me.memberships.filter((m) => m.status === "active");
       if (activeMemberships.length === 0) {

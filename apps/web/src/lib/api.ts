@@ -1,5 +1,6 @@
-// FE goi BE (apps/api) THUAN TUY qua HTTP/JSON voi Bearer JWT - khong SSR-proxy,
-// khong session/cookie chia se giua 2 app (yeu cau "tach rieng FE va BE").
+// Dashboard browser auth is an HttpOnly cookie through same-origin `/api`. Bearer
+// remains available for API clients; this helper deliberately never stores a JWT.
+import { COOKIE_SESSION_TOKEN, getCsrfToken } from "./auth";
 export const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3000";
 
 export class ApiError extends Error {
@@ -24,8 +25,13 @@ interface RequestOpts {
 
 export async function apiFetch<T>(path: string, opts: RequestOpts = {}): Promise<T> {
   const headers: Record<string, string> = {};
-  if (opts.token) headers["Authorization"] = `Bearer ${opts.token}`;
+  if (opts.token && opts.token !== COOKIE_SESSION_TOKEN) headers["Authorization"] = `Bearer ${opts.token}`;
   if (opts.tenantId) headers["x-tenant-id"] = opts.tenantId;
+  const method = opts.method ?? "GET";
+  if (!["GET", "HEAD", "OPTIONS"].includes(method.toUpperCase())) {
+    const csrfToken = getCsrfToken();
+    if (csrfToken) headers["x-csrf-token"] = csrfToken;
+  }
 
   let body: BodyInit | undefined;
   if (opts.body !== undefined) {
@@ -37,7 +43,7 @@ export async function apiFetch<T>(path: string, opts: RequestOpts = {}): Promise
     }
   }
 
-  const res = await fetch(`${API_BASE}${path}`, { method: opts.method ?? "GET", headers, body });
+  const res = await fetch(`${API_BASE}${path}`, { method, headers, body, credentials: "include" });
   if (!res.ok) {
     let message = `HTTP ${res.status}`;
     let data: unknown;

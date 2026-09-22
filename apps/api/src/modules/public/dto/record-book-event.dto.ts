@@ -1,8 +1,15 @@
-import { IsIn } from "class-validator";
+import { IsIn, IsInt, IsOptional, Max, Min, ValidateIf } from "class-validator";
 
 export class RecordBookEventDto {
-  // F12: chi nhan 'page_view' tu client - 'open' da tu dong ghi nhan trong getBook()
-  // (moi lan tai sach thanh cong), khong cho client tu goi 'open' de tranh gia mao so.
-  @IsIn(["page_view"])
-  eventType!: "page_view";
+  // An "open" is sent by the browser only after a reader session has loaded.  The
+  // server deduplicates it by signed session id, so SSR metadata requests and retry
+  // traffic cannot inflate statistics.
+  @IsIn(["open", "page_view"])
+  eventType!: "open" | "page_view";
+
+  @ValidateIf((o) => o.eventType === "page_view")
+  @IsInt()
+  @Min(1)
+  @Max(100000)
+  page?: number;
 }

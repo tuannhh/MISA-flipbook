@@ -19,6 +19,9 @@ import {
   UploadedFile,
   UseGuards,
   UseInterceptors,
+  SetMetadata,
+  ConflictException,
+  ServiceUnavailableException,
 } from "@nestjs/common";
 import { FileInterceptor } from "@nestjs/platform-express";
 import type { Response } from "express";
@@ -34,9 +37,11 @@ import { UpdateBookSettingsDto } from "./dto/update-book-settings.dto";
 import { randomSuffix8, slugifyVietnamese } from "./util/slugify";
 import { buildReaderPages } from "./util/build-reader-pages";
 import { RateLimitService } from "../../common/rate-limit/rate-limit.service";
+import { PDF_UPLOAD } from "../../common/tenant/pdf-upload";
+import { IMAGE_UPLOAD } from "../../common/tenant/image-upload";
 
-const PDF_SIGNATURE = Buffer.from("%PDF-");
 const PDF_MAX_BYTES = Number(process.env.PDF_MAX_BYTES ?? 200 * 1024 * 1024);
+const TENANT_STORAGE_BYTES = Number(process.env.TENANT_STORAGE_BYTES ?? 50 * 1024 * 1024 * 1024);
 const PIPELINE_VERSION = process.env.PDF_PIPELINE_VERSION ?? "v1";
 const MAX_SLUG_RETRIES = 5;
 
@@ -99,32 +104,20 @@ export class BooksController {
   @Post()
   async create(@Req() req: AuthedRequest, @Body() dto: CreateBookDto) {
     const baseSlug = slugifyVietnamese(dto.title);
-    let lastError: unknown;
     for (let attempt = 0; attempt < MAX_SLUG_RETRIES; attempt++) {
       const suffix = randomSuffix8();
-      try {
-        const { rows } = await req.dbClient.query(
-          `INSERT INTO books (tenant_id, owner_id, title, permalink_slug, permalink_suffix)
+      const { rows } = await req.dbClient.query(
+        `INSERT INTO books (tenant_id, owner_id, title, permalink_slug, permalink_suffix)
            VALUES ($1,$2,$3,$4,$5)
+           ON CONFLICT (permalink_slug, permalink_suffix) DO NOTHING
            RETURNING id, title, permalink_slug, permalink_suffix, status, created_at`,
-          [req.tenantId, req.userId, dto.title, baseSlug, suffix]
-        );
-        return rows[0];
-      } catch (err: unknown) {
-        const pgErr = err as { code?: string };
-        if (pgErr.code === "23505") {
-          // Trung (slug, suffix) - F02 yeu cau retry khi trung, khong loi ra nguoi dung.
-          lastError = err;
-          continue;
-        }
-        throw err;
-      }
+        [req.tenantId, req.userId, dto.title, baseSlug, suffix]
+      );
+      if (rows.length) return rows[0];
     }
     throw new BadRequestException(
       `Khong tao duoc permalink duy nhat sau ${MAX_SLUG_RETRIES} lan thu.`
     );
-    // eslint-disable-next-line no-unreachable
-    void lastError;
   }
 
   @Get(":id")
@@ -142,7 +135,7 @@ export class BooksController {
   }
 
   @Post(":id/upload")
-  @UseInterceptors(FileInterceptor("file", { limits: { fileSize: PDF_MAX_BYTES } }))
+  @SetMetadata(PDF_UPLOAD, true)
   async upload(
     @Req() req: AuthedRequest,
     @Param("id") bookId: string,
@@ -151,14 +144,13 @@ export class BooksController {
     if (!file) {
       throw new BadRequestException("Thieu file PDF (field 'file').");
     }
-    if (file.buffer.subarray(0, 5).compare(PDF_SIGNATURE) !== 0) {
-      throw new BadRequestException("File khong dung dinh dang PDF (sai chu ky %PDF-).");
-    }
     if (file.size > PDF_MAX_BYTES) {
       throw new BadRequestException(`File vuot qua gioi han ${PDF_MAX_BYTES} bytes.`);
     }
 
-    const bookRes = await req.dbClient.query("SELECT id FROM books WHERE id = $1", [bookId]);
+    // Serialize quota admission per tenant and revision numbering per book.
+    await req.dbClient.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [req.tenantId]);
+    const bookRes = await req.dbClient.query("SELECT id FROM books WHERE id = $1 AND deleted_at IS NULL FOR UPDATE", [bookId]);
     if (bookRes.rowCount === 0) {
       // RLS da loc: hoac khong ton tai, hoac khong phai sach cua nguoi goi -> 404 chung,
       // khong tiet lo su khac biet (tranh do tim ID sach nguoi khac).
@@ -171,10 +163,24 @@ export class BooksController {
     );
     const revisionNumber = revNumRes.rows[0].next as number;
     const revisionId = crypto.randomUUID();
-    const checksum = crypto.createHash("sha256").update(file.buffer).digest("hex");
+    const checksum = req.pdfChecksum!;
     const objectKey = `${req.tenantId}/${bookId}/${revisionId}/source.pdf`;
 
-    await this.storage.saveBuffer(objectKey, file.buffer);
+    const budget = await req.dbClient.query("SELECT * FROM upload_tenant_budget($1)", [req.tenantId]);
+    const usage = budget.rows[0];
+    const maxSource = Number(usage.quotas?.source_bytes ?? process.env.TENANT_SOURCE_BYTES ?? 10737418240);
+    const maxLogical = Number(usage.quotas?.storage_bytes ?? TENANT_STORAGE_BYTES);
+    const maxJobs = Number(usage.quotas?.pending_jobs ?? process.env.TENANT_PENDING_JOBS ?? 20);
+    if (
+      Number(usage.source_bytes) + file.size > maxSource ||
+      Number(usage.logical_bytes) + file.size > maxLogical ||
+      Number(usage.pending_jobs) >= maxJobs
+    ) {
+      throw new ConflictException("Tenant da vuot han muc dung luong hoac so job dang cho.");
+    }
+
+    await this.storage.adoptFile(objectKey, file.path);
+    req.rollbackFiles?.push(this.storage.getAbsolutePath(objectKey));
 
     await req.dbClient.query(
       `INSERT INTO revisions (id, tenant_id, book_id, revision_number, source_key, checksum, pipeline_version, state)
@@ -241,8 +247,8 @@ export class BooksController {
     const revision = await this.resolvePreviewRevision(req, bookId, revisionId);
     const manifest = JSON.parse((await this.storage.readBuffer(revision.manifest_key)).toString("utf8"));
     const assetsRes = await req.dbClient.query(
-      `SELECT id, kind, object_key FROM assets
-       WHERE book_id = $1 AND revision_id = $2 AND kind IN ('page_image','thumbnail')
+      `SELECT id, kind, object_key, content_type FROM assets
+       WHERE book_id = $1 AND revision_id = $2 AND kind IN ('page_image','thumbnail','media')
        ORDER BY object_key`,
       [bookId, revision.id]
     );
@@ -282,7 +288,7 @@ export class BooksController {
   ) {
     const { rows } = await req.dbClient.query(
       `SELECT object_key, content_type FROM assets
-       WHERE id = $1 AND book_id = $2 AND kind IN ('page_image','thumbnail')`,
+       WHERE id = $1 AND book_id = $2 AND kind IN ('page_image','thumbnail','share_thumbnail','media')`,
       [assetId, bookId]
     );
     if (rows.length === 0) {
@@ -362,6 +368,83 @@ export class BooksController {
         has_background: false,
       }
     );
+  }
+
+  /** Creator-uploaded social cover. The PDF worker center-crops it to 1200x675 WebP. */
+  @Post(":id/share-thumbnail")
+  @SetMetadata(IMAGE_UPLOAD, true)
+  async uploadShareThumbnail(
+    @Req() req: AuthedRequest,
+    @Param("id") bookId: string,
+    @UploadedFile() file?: Express.Multer.File
+  ) {
+    if (!file || !req.uploadContentType || !req.tenantId) {
+      throw new BadRequestException("Thieu file anh (field 'file').");
+    }
+    const revision = await req.dbClient.query<{ id: string }>(
+      `SELECT published_revision_id AS id FROM books
+       WHERE id = $1 AND status = 'published' AND published_revision_id IS NOT NULL`,
+      [bookId]
+    );
+    if (!revision.rows[0]) throw new BadRequestException("Can xuat ban sach truoc khi dat thumbnail chia se.");
+
+    const assetId = crypto.randomUUID();
+    const sourceKey = `${req.tenantId}/${bookId}/.thumbnail-source/${assetId}`;
+    const outputKey = `${req.tenantId}/${bookId}/${revision.rows[0].id}/share-thumbnails/${assetId}`;
+    let outputObjectKey: string | null = null;
+    try {
+      await this.storage.adoptFile(sourceKey, file.path);
+      req.rollbackFiles?.push(this.storage.getAbsolutePath(sourceKey));
+      let response: globalThis.Response;
+      try {
+        response = await fetch(`${process.env.PDF_WORKER_URL ?? "http://pdf-worker:8000"}/internal/share-thumbnail`, {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-internal-token": process.env.INTERNAL_API_TOKEN ?? "" },
+          body: JSON.stringify({ source_key: sourceKey, output_key: outputKey }),
+          signal: AbortSignal.timeout(Number(process.env.SHARE_THUMBNAIL_TIMEOUT_MS ?? 60000)),
+        });
+      } catch {
+        throw new ServiceUnavailableException("Dich vu xu ly thumbnail tam thoi khong san sang. Vui long thu lai.");
+      }
+      if (response.status === 503 || response.status >= 500) {
+        throw new ServiceUnavailableException("Dich vu xu ly thumbnail dang ban. Vui long thu lai.");
+      }
+      if (!response.ok) throw new BadRequestException("Khong the xu ly thumbnail. Vui long thu anh khac.");
+      const converted = (await response.json()) as { status?: string; object_key?: string; bytes?: number };
+      outputObjectKey = converted.object_key ?? null;
+      const outputBytes = converted.bytes;
+      if (converted.status !== "ok" || outputObjectKey !== `${outputKey}/cover.webp` || typeof outputBytes !== "number" || !Number.isSafeInteger(outputBytes) || outputBytes < 1) {
+        throw new BadRequestException("Khong the xu ly thumbnail. Vui long thu anh khac.");
+      }
+      req.rollbackFiles?.push(this.storage.getAbsolutePath(outputObjectKey));
+      const previous = await req.dbClient.query<{ id: string; object_key: string }>(
+        `SELECT a.id, a.object_key FROM book_settings bs JOIN assets a ON a.id = bs.thumbnail_asset_id
+         WHERE bs.book_id = $1 AND a.kind = 'share_thumbnail'`,
+        [bookId]
+      );
+      await req.dbClient.query(
+        `INSERT INTO assets (id, tenant_id, book_id, revision_id, kind, object_key, content_type, bytes)
+         VALUES ($1,$2,$3,$4,'share_thumbnail',$5,'image/webp',$6)`,
+        [assetId, req.tenantId, bookId, revision.rows[0].id, outputObjectKey, outputBytes]
+      );
+      const { rows } = await req.dbClient.query(
+        `INSERT INTO book_settings (tenant_id, book_id, thumbnail_asset_id)
+         VALUES ($1,$2,$3)
+         ON CONFLICT (book_id) DO UPDATE SET thumbnail_asset_id = EXCLUDED.thumbnail_asset_id
+         RETURNING allow_download, thumbnail_asset_id, ga_id, (password_hash IS NOT NULL) AS has_password, visibility,
+                   (background_object_key IS NOT NULL) AS has_background`,
+        [req.tenantId, bookId, assetId]
+      );
+      for (const old of previous.rows) {
+        if (old.object_key !== outputObjectKey) {
+          await req.dbClient.query("DELETE FROM assets WHERE id = $1", [old.id]);
+          req.afterCommitTasks?.push(() => this.storage.delete(old.object_key));
+        }
+      }
+      return rows[0];
+    } finally {
+      await this.storage.delete(sourceKey).catch(() => undefined);
+    }
   }
 
   /** F15: anh nen backdrop cho khung doc (khac han anh trang/thumbnail cua PDF). */
@@ -452,13 +535,18 @@ export class BooksController {
     @Param("id") bookId: string,
     @Body() dto: UpdateBookSettingsDto
   ) {
-    const bookRes = await req.dbClient.query(`SELECT id FROM books WHERE id = $1`, [bookId]);
+    const bookRes = await req.dbClient.query(
+      `SELECT b.id, COALESCE(bs.visibility, 'public') AS visibility
+       FROM books b LEFT JOIN book_settings bs ON bs.book_id = b.id
+       WHERE b.id = $1`,
+      [bookId]
+    );
     if (bookRes.rowCount === 0) {
       throw new NotFoundException("Khong tim thay sach.");
     }
     if (dto.thumbnailAssetId) {
       const assetRes = await req.dbClient.query(
-        `SELECT id FROM assets WHERE id = $1 AND book_id = $2 AND kind = 'thumbnail'`,
+        `SELECT id FROM assets WHERE id = $1 AND book_id = $2 AND kind IN ('thumbnail', 'share_thumbnail')`,
         [dto.thumbnailAssetId, bookId]
       );
       if (assetRes.rowCount === 0) {
@@ -469,9 +557,12 @@ export class BooksController {
     // luc mot cach mo ho). Chi hash khi thuc su co password moi - khong hash chuoi rong.
     const removePassword = dto.removePassword === true;
     const newPasswordHash = !removePassword && dto.password ? await argon2.hash(dto.password) : null;
-    // access_epoch tang moi khi mat khau doi/xoa - vo hieu hoa ngay moi access token da
-    // phat qua verify-password truoc do (F05: doi mat khau phai buoc nguoi xem nhap lai).
-    const bumpEpoch = removePassword || newPasswordHash !== null;
+    // Reader credentials contain access_epoch. Advance it for both password and
+    // visibility changes, otherwise a public token minted before "Private" would
+    // remain usable until its expiry. A same-value update does not disrupt readers.
+    const visibilityProvided = Object.prototype.hasOwnProperty.call(req.body ?? {}, "visibility");
+    const visibilityChanged = visibilityProvided && dto.visibility !== bookRes.rows[0].visibility;
+    const bumpEpoch = removePassword || newPasswordHash !== null || visibilityChanged;
     // F06: gaId phan biet 3 trang thai (khong the dung COALESCE nhu cac field khac vi
     // "gui null" phai XOA duoc gia tri, khac voi "khong gui field" = giu nguyen). PHAI
     // kiem tra tren req.body THO (JSON goc), KHONG tren instance `dto`: voi target ES2022,

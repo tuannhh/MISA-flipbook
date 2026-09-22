@@ -67,6 +67,12 @@ export interface ReaderPage {
     target: string | number | null;
     rect_norm: number[];
   }>;
+  media: Array<{
+    kind: "audio" | "video";
+    contentType: string;
+    rectNorm: number[];
+    mediaAssetId: string | null;
+  }>;
   imageAssetId: string | null;
   thumbAssetId: string | null;
 }
@@ -86,6 +92,8 @@ export interface PublicBook {
   hasBackground: boolean;
   /** F06: GA4 Measurement ID DA la gia tri hieu luc (uu tien sach, fallback tenant). */
   gaId: string | null;
+  /** Short-lived token scoped to one book/revision, never a dashboard JWT. */
+  readerToken: string;
   pages: ReaderPage[];
 }
 
@@ -93,6 +101,12 @@ export interface PublicBook {
  * thay cho bang Tenants/bang sach xuyen-tenant day so lieu ky thuat truoc day. tenant_id
  * giu lai CHI de FE dieu huong sang trang chi tiet sach (xem BookDetailPage muc
  * "tenantId override"), khong hien thi truc tiep tren bang. */
+export interface AdminTenant {
+  id: string;
+  name: string;
+  status: "active" | "suspended";
+}
+
 export interface AdminBook {
   id: string;
   title: string;
@@ -100,6 +114,12 @@ export interface AdminBook {
   owner_email: string;
   published_at: string | null;
   views: number;
+}
+
+export interface AdminBooksPage {
+  items: AdminBook[];
+  total: number;
+  nextCursor: string | null;
 }
 
 /** F13-simplification: so lieu tong quan Admin dashboard (GET /admin/stats) - rut gon

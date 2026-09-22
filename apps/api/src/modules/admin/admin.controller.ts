@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, NotFoundException, Param, Patch, Post, Query, Req, UseGuards, UseInterceptors } from "@nestjs/common";
+import { BadRequestException, Body, Controller, Delete, Get, NotFoundException, Param, Patch, Post, Query, Req, UseGuards, UseInterceptors } from "@nestjs/common";
 import * as argon2 from "argon2";
 import { JwtAuthGuard } from "../../common/auth/jwt-auth.guard";
 import { DbContextInterceptor } from "../../common/tenant/db-context.interceptor";
@@ -160,18 +160,51 @@ export class AdminController {
   // "views" la TONG luot xem trang TU TRUOC DEN NAY (khac opens_30d/page_views_30d cua
   // ban truoc, da bo cua so 30 ngay theo yeu cau don gian hoa).
   @Get("books")
-  async listBooks(@Req() req: AuthedRequest) {
+  async listBooks(
+    @Req() req: AuthedRequest,
+    @Query("limit") limitQuery?: string,
+    @Query("cursor") cursorQuery?: string,
+    @Query("from") from?: string,
+    @Query("to") to?: string
+  ) {
     assertAdmin(req);
+    const limit = Math.min(100, Math.max(1, Number(limitQuery) || 20));
+    if ((from && !/^\d{4}-\d{2}-\d{2}$/.test(from)) || (to && !/^\d{4}-\d{2}-\d{2}$/.test(to))) {
+      throw new BadRequestException("Khoang ngay khong hop le.");
+    }
+    let cursorPublishedAt: string | null = null;
+    let cursorId: string | null = null;
+    if (cursorQuery) {
+      try {
+        const cursor = JSON.parse(Buffer.from(cursorQuery, "base64url").toString("utf8")) as { publishedAt?: string; id?: string };
+        if (!cursor.publishedAt || !cursor.id || Number.isNaN(Date.parse(cursor.publishedAt)) || !/^[0-9a-f-]{36}$/i.test(cursor.id)) throw new Error("invalid");
+        cursorPublishedAt = cursor.publishedAt;
+        cursorId = cursor.id;
+      } catch {
+        throw new BadRequestException("Cursor phan trang khong hop le.");
+      }
+    }
+    const commonWhere = `b.status = 'published' AND b.deleted_at IS NULL
+      AND ($1::date IS NULL OR b.published_at >= $1::date)
+      AND ($2::date IS NULL OR b.published_at < ($2::date + INTERVAL '1 day'))`;
     const { rows } = await req.dbClient.query(
       `SELECT b.id, b.title, b.tenant_id, b.owner_id, u.email AS owner_email, b.published_at,
         (SELECT COALESCE(SUM(ds.page_views), 0) FROM daily_stats ds WHERE ds.book_id = b.id) AS views
        FROM books b
        JOIN users u ON u.id = b.owner_id
-       WHERE b.status = 'published' AND b.deleted_at IS NULL
-       ORDER BY b.published_at DESC NULLS LAST
-       LIMIT 500`
+       WHERE ${commonWhere}
+         AND ($3::timestamptz IS NULL OR (b.published_at, b.id) < ($3::timestamptz, $4::uuid))
+       ORDER BY b.published_at DESC NULLS LAST, b.id DESC
+       LIMIT $5`,
+      [from ?? null, to ?? null, cursorPublishedAt, cursorId, limit + 1]
     );
-    return rows;
+    const items = rows.slice(0, limit);
+    const last = items.at(-1) as { published_at: string; id: string } | undefined;
+    const nextCursor = rows.length > limit && last
+      ? Buffer.from(JSON.stringify({ publishedAt: last.published_at, id: last.id })).toString("base64url")
+      : null;
+    const totalRes = await req.dbClient.query<{ total: string }>(`SELECT COUNT(*) AS total FROM books b WHERE ${commonWhere}`, [from ?? null, to ?? null]);
+    return { items, total: Number(totalRes.rows[0].total), nextCursor };
   }
 
   // F13-simplification: XOA MEM 1 sach tu Admin (chua tung co endpoint xoa sach nao

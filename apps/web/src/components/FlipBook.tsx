@@ -13,7 +13,10 @@ import { useTranslations } from "next-intl";
 import type { ReaderPage } from "@/lib/types";
 import { useSimpleReaderMode } from "@/lib/useSimpleReaderMode";
 import { XIcon } from "@/components/xds/icons/XIcon";
+import { XButton } from "@/components/xds/XButton";
+import { XDialog } from "@/components/xds/XDialog";
 import { XDropdownMenu } from "@/components/xds/XDropdownMenu";
+import { XInput } from "@/components/xds/XInput";
 import { useToast } from "@/components/xds/XToast";
 import { getFacebookAppId, shareViaFacebookDialog } from "@/lib/facebookShare";
 
@@ -68,19 +71,29 @@ function computeImageBox(ownAspect: number, containerAspect: number) {
 
 interface PageProps {
   imageUrl: string | null;
+  assetUrl: (assetId: string) => string;
   rotation?: number;
   alt: string;
   widthPt: number;
   heightPt: number;
   pageAspect: number;
   links?: ReaderPage["links"];
+  media?: ReaderPage["media"];
+  active?: boolean;
   onGoToPage?: (pageNumber: number) => void;
 }
 
 const Page = forwardRef<HTMLDivElement, PageProps>(function Page(
-  { imageUrl, rotation = 0, alt, widthPt, heightPt, pageAspect, links, onGoToPage },
+  { imageUrl, assetUrl, rotation = 0, alt, widthPt, heightPt, pageAspect, links, media, active = false, onGoToPage },
   ref
 ) {
+  const mediaRefs = useRef<Array<HTMLMediaElement | null>>([]);
+  // PageFlip keeps some hidden page nodes mounted. Media must never continue
+  // playing after its page is no longer visible, and we never autoplay it.
+  useEffect(() => {
+    if (active) return;
+    mediaRefs.current.forEach((element) => element?.pause());
+  }, [active]);
   const rotated = rotation === 90 || rotation === 270;
   const ownAspect = rotated ? heightPt / widthPt : widthPt / heightPt;
   const box = computeImageBox(ownAspect, pageAspect);
@@ -96,6 +109,54 @@ const Page = forwardRef<HTMLDivElement, PageProps>(function Page(
       ) : (
         <div className="flipbook-blank" aria-hidden />
       )}
+      {media?.map((item, i) => {
+        if (!item.mediaAssetId) return null;
+        const [x0, y0, x1, y1] = item.rectNorm;
+        const style = {
+          left: `${(box.left + x0 * box.width) * 100}%`,
+          top: `${(box.top + y0 * box.height) * 100}%`,
+          width: `${(x1 - x0) * box.width * 100}%`,
+          height: `${(y1 - y0) * box.height * 100}%`,
+        };
+        const stopPageFlip = (event: ReactPointerEvent<HTMLElement>) => event.stopPropagation();
+        const source = assetUrl(item.mediaAssetId);
+        return (
+          <div
+            key={`media-${i}`}
+            className={`flipbook-media-overlay is-${item.kind}`}
+            style={style}
+            onPointerDown={stopPageFlip}
+            onClick={(event) => event.stopPropagation()}
+          >
+            {item.kind === "audio" ? (
+              <audio
+                ref={(element) => {
+                  mediaRefs.current[i] = element;
+                }}
+                controls
+                controlsList="nodownload"
+                preload="none"
+                aria-label="Audio trong PDF"
+              >
+                <source src={source} type={item.contentType} />
+              </audio>
+            ) : (
+              <video
+                ref={(element) => {
+                  mediaRefs.current[i] = element;
+                }}
+                controls
+                controlsList="nodownload"
+                playsInline
+                preload="none"
+                aria-label="Video trong PDF"
+              >
+                <source src={source} type={item.contentType} />
+              </video>
+            )}
+          </div>
+        );
+      })}
       {links?.map((link, i) => {
         // internal_goto chua resolve duoc so trang (target=null) hoac unsupported_action
         // (Muc C, PLAN.md) - khong render vung bam, khong the hien loi cho nguoi doc.
@@ -152,6 +213,7 @@ interface PageFlipApi {
 export function FlipBook({
   title,
   pages,
+  initialPage,
   imageUrl,
   shareUrl,
   downloadUrl,
@@ -160,6 +222,7 @@ export function FlipBook({
 }: {
   title: string;
   pages: ReaderPage[];
+  initialPage?: number;
   imageUrl: (assetId: string) => string;
   /** F08: URL cong khai de chia se (copy/Facebook/LinkedIn). Bo trong = an het khu chia se. */
   shareUrl?: string;
@@ -179,10 +242,17 @@ export function FlipBook({
   const containerRef = useRef<HTMLDivElement>(null);
   const bookRef = useRef<{ pageFlip(): PageFlipApi } | null>(null);
   const [containerWidth, setContainerWidth] = useState(0);
-  const [currentIndex, setCurrentIndex] = useState(0);
+  const [currentIndex, setCurrentIndex] = useState(() => {
+    const initialIndex = initialPage === undefined ? 0 : pages.findIndex((page) => page.page === initialPage);
+    return initialIndex >= 0 ? initialIndex : 0;
+  });
   const [zoom, setZoom] = useState(ZOOM_MIN);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [coarsePointer, setCoarsePointer] = useState(false);
+  const [navigatorOpen, setNavigatorOpen] = useState(false);
+  const [pageInput, setPageInput] = useState("1");
+  const [requestedIndex, setRequestedIndex] = useState<number | null>(null);
   const panDrag = useRef<{ startX: number; startY: number; startPanX: number; startPanY: number } | null>(null);
 
   useEffect(() => {
@@ -195,15 +265,31 @@ export function FlipBook({
     return () => ro.disconnect();
   }, []);
 
-  const pageImg = useCallback((p: ReaderPage) => (p.imageAssetId ? imageUrl(p.imageAssetId) : null), [imageUrl]);
+  useEffect(() => {
+    const media = window.matchMedia("(pointer: coarse)");
+    const update = () => setCoarsePointer(media.matches);
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
 
   const pageAspect = pages[0] && pages[0].heightPt > 0 ? pages[0].widthPt / pages[0].heightPt : 0.75;
   const width = BASE_UNIT;
   const height = Math.round(BASE_UNIT / pageAspect);
 
-  // Tu dong 1/2 trang theo be rong khung (PLAN.md muc 4: "Mobile mac dinh mot trang ke
-  // ca man hinh doc/ngang; tablet co chon 1/2 trang theo chieu rong thuc te").
-  const isSpreadCapable = containerWidth >= SPREAD_MIN_WIDTH && pages.length > 2;
+  // Mobile/tablet are deliberately always one page, including landscape. A wide
+  // desktop with a mouse/trackpad receives a two-page spread.
+  const isSpreadCapable = !coarsePointer && containerWidth >= SPREAD_MIN_WIDTH && pages.length > 2;
+  // Keep the network window small: a 500-page catalogue no longer starts 500 image
+  // downloads. requestedIndex preloads a direct jump before PageFlip reaches it.
+  const loadCenter = requestedIndex ?? currentIndex;
+  const firstLoadedIndex = Math.max(0, loadCenter - (isSpreadCapable ? 3 : 2));
+  const lastLoadedIndex = Math.min(pages.length - 1, loadCenter + (isSpreadCapable ? 5 : 3));
+  const pageImg = useCallback(
+    (p: ReaderPage, index: number) =>
+      index >= firstLoadedIndex && index <= lastLoadedIndex && p.imageAssetId ? imageUrl(p.imageAssetId) : null,
+    [firstLoadedIndex, imageUrl, lastLoadedIndex]
+  );
 
   // BUG THAT phat hien 2026-09-17 (nguoi dung bao qua Chrome DevTools that o
   // iPhone 16 Pro Max 440px): page-flip's "stretch" size KHONG chi dua vao prop
@@ -230,14 +316,30 @@ export function FlipBook({
 
   const flippingTime = simple ? 1 : 700;
 
-  const goNext = useCallback(() => bookRef.current?.pageFlip().flipNext(), []);
-  const goPrev = useCallback(() => bookRef.current?.pageFlip().flipPrev(), []);
+  const goNext = useCallback(() => {
+    setRequestedIndex((index) => Math.min(pages.length - 1, (index ?? currentIndex) + 1));
+    bookRef.current?.pageFlip().flipNext();
+  }, [currentIndex, pages.length]);
+  const goPrev = useCallback(() => {
+    setRequestedIndex((index) => Math.max(0, (index ?? currentIndex) - 1));
+    bookRef.current?.pageFlip().flipPrev();
+  }, [currentIndex]);
   // F10 Muc A: link noi bo (internal_goto) - target la so trang 1-based (BE),
   // StPageFlip dung index 0-based khop voi thu tu pages[] truyen vao children.
-  const goToPage = useCallback((pageNumber: number) => bookRef.current?.pageFlip().flip(pageNumber - 1), []);
+  const goToPage = useCallback(
+    (pageNumber: number) => {
+      const index = pages.findIndex((page) => page.page === pageNumber);
+      if (index < 0) return;
+      setRequestedIndex(index);
+      bookRef.current?.pageFlip().flip(index);
+    },
+    [pages]
+  );
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
+      const target = e.target as HTMLElement | null;
+      if (e.defaultPrevented || target?.closest("input, textarea, select, [contenteditable='true']")) return;
       if (e.key === "ArrowRight") goNext();
       if (e.key === "ArrowLeft") goPrev();
     }
@@ -248,6 +350,7 @@ export function FlipBook({
   const onFlip = useCallback(
     (e: { data: number }) => {
       setCurrentIndex(e.data);
+      setRequestedIndex(null);
       const p = pages[e.data];
       if (p) onPageChange?.(p.page);
     },
@@ -361,7 +464,11 @@ export function FlipBook({
   // bam nut Chia se trong chinh reader), khong dung chung 1 component/route.
   async function copyEmbedCode() {
     if (!shareUrl) return;
-    const code = `<iframe src="${shareUrl}/embed" style="width:100%;aspect-ratio:16/9;border:0" allowfullscreen loading="lazy"></iframe>`;
+    const embedUrl = new URL(shareUrl);
+    embedUrl.pathname = `${embedUrl.pathname.replace(/\/$/, "")}/embed`;
+    embedUrl.search = "";
+    embedUrl.hash = "";
+    const code = `<iframe src="${embedUrl.toString()}" style="width:100%;aspect-ratio:16/9;border:0" allowfullscreen loading="lazy"></iframe>`;
     try {
       await navigator.clipboard.writeText(code);
       toast("success", t("shareEmbedCopied"));
@@ -432,6 +539,13 @@ export function FlipBook({
       }
     : undefined;
 
+  function submitPageJump() {
+    const target = Number(pageInput);
+    if (!Number.isInteger(target) || target < 1 || target > pages.length) return;
+    goToPage(target);
+    setNavigatorOpen(false);
+  }
+
   return (
     <div className="reader" style={readerStyle} ref={readerRootRef}>
       <div className="reader-top">
@@ -441,7 +555,19 @@ export function FlipBook({
           <span className="reader-top-title-text">{title}</span>
         </span>
         <span className="reader-top-right">
-          <span>{pageLabel}</span>
+          <span className="reader-page-label">{pageLabel}</span>
+          <button
+            type="button"
+            className="reader-icon-btn"
+            onClick={() => {
+              setPageInput(String(currentPage?.page ?? 1));
+              setNavigatorOpen(true);
+            }}
+            aria-label={t("pageNavigator")}
+            title={t("pageNavigator")}
+          >
+            <XIcon name="file-text" size={18} />
+          </button>
           <button
             type="button"
             className="reader-icon-btn"
@@ -586,15 +712,18 @@ export function FlipBook({
               style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, transformOrigin: "center center" }}
               onFlip={onFlip}
             >
-              {pages.map((p) => (
+              {pages.map((p, index) => (
                 <Page
                   key={p.page}
-                  imageUrl={pageImg(p)}
+                  imageUrl={pageImg(p, index)}
+                  assetUrl={imageUrl}
                   rotation={p.rotation}
                   widthPt={p.widthPt}
                   heightPt={p.heightPt}
                   pageAspect={pageAspect}
                   links={p.links}
+                  media={p.media}
+                  active={index === currentIndex || (isSpreadCapable && index === currentIndex + 1)}
                   onGoToPage={goToPage}
                   alt={t("pageLabelSingle", { page: p.page, total: pages.length })}
                 />
@@ -619,6 +748,60 @@ export function FlipBook({
         {simple ? t("hintSimple") : t("hintNormal")}
         {reducedMotion ? t("hintReducedMotion") : ""}
       </div>
+
+      <XDialog
+        open={navigatorOpen}
+        onOpenChange={setNavigatorOpen}
+        title={t("pageNavigator")}
+        width="min(640px, 100%)"
+        footer={
+          <>
+            <XButton variant="secondary" onClick={() => setNavigatorOpen(false)}>{t("closeNavigator")}</XButton>
+            <XButton variant="primary" onClick={submitPageJump}>{t("goToPage")}</XButton>
+          </>
+        }
+      >
+        <form
+          className="space-y-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            submitPageJump();
+          }}
+        >
+          <label className="block space-y-1.5">
+            <span className="text-[13px] font-medium text-[var(--xds-text)]">{t("pageInputLabel", { total: pages.length })}</span>
+            <XInput
+              autoFocus
+              inputMode="numeric"
+              min={1}
+              max={pages.length}
+              type="number"
+              value={pageInput}
+              onChange={(event) => setPageInput(event.target.value)}
+            />
+          </label>
+          <div className="reader-thumbnail-grid" aria-label={t("thumbnailList")}>
+            {pages.map((page) => (
+              <button
+                key={page.page}
+                type="button"
+                className={`reader-thumbnail${page.page === currentPage?.page ? " is-current" : ""}`}
+                onClick={() => {
+                  goToPage(page.page);
+                  setNavigatorOpen(false);
+                }}
+                aria-label={t("pageLabelSingle", { page: page.page, total: pages.length })}
+              >
+                {page.thumbAssetId && (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={imageUrl(page.thumbAssetId)} alt="" loading="lazy" />
+                )}
+                <span>{page.page}</span>
+              </button>
+            ))}
+          </div>
+        </form>
+      </XDialog>
     </div>
   );
 }

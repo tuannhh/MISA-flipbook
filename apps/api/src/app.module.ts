@@ -1,4 +1,5 @@
-import { Module } from "@nestjs/common";
+import { MiddlewareConsumer, Module, NestModule } from "@nestjs/common";
+import { CsrfMiddleware } from "./common/auth/csrf.middleware";
 import { DbModule } from "./common/db/db.module";
 import { RateLimitModule } from "./common/rate-limit/rate-limit.module";
 import { StorageModule } from "./storage/storage.module";
@@ -24,4 +25,8 @@ import { PublicModule } from "./modules/public/public.module";
     PublicModule,
   ],
 })
-export class AppModule {}
+export class AppModule implements NestModule {
+  configure(consumer: MiddlewareConsumer): void {
+    consumer.apply(CsrfMiddleware).forRoutes("*");
+  }
+}

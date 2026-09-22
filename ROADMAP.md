@@ -72,6 +72,13 @@ không cần App/OAuth, đã kiểm chứng URL sinh đúng qua Claude Browser. 
 cao" (OAuth đăng thẳng qua tài khoản đã kết nối) vẫn vướng điểm nghẽn giống Facebook: cần
 người dùng tự tạo LinkedIn Developer App trước — chưa làm. Instagram chưa bắt đầu.
 
+**Cập nhật candidate Docker edge (21/09/2026):** Compose hiện chạy web và API sau Nginx, chỉ proxy
+mở cổng public; browser gọi API cùng origin qua `/api`. Nginx non-root ghi đè header IP do client gửi,
+API tin đúng một hop có cấu hình và regression thật xác nhận không thể giả `X-Forwarded-For` để lách
+login throttle. P1 (14), P2 (21), P3 (35), security audit (14), P5 upload/UAT (21) và proxy security
+(5) đều pass qua public proxy trên stack cô lập. Đây tăng độ sát production của Docker pilot, nhưng
+chưa thay cho TLS/CDN và topology proxy do DevOps MISA chốt.
+
 ## Backlog ưu tiên
 P0: thu thập PDF mẫu → benchmark PDFium/pypdf → annotation/media inventory → thử hiệu ứng + JPEG fallback trên máy yếu → quyết định ADR.
 P1: schema/permission tests trước → API auth → upload private → dispatcher/outbox → worker resource limits.
@@ -134,10 +141,13 @@ ngoài + link nội bộ về trang cuối), không hồi quy 88/88 test cũ. F1
 báo cáo rõ là bỏ qua, không tự chạy. F06 (GA4), F12 (dashboard Creator), F13 (dashboard
 Admin) của P4 chưa làm — đang làm tiếp theo thứ tự đó.
 
-**P4 — F10 Mức B (audio/video) — TẠM HOÃN theo quyết định người dùng (2026-09-17)**: đã hỏi
-trực tiếp vì thiếu PDF mẫu thật có audio/video (điều kiện bắt buộc của PLAN.md trước khi coi
-Mức B là xong) — người dùng chọn "tạm hoãn Mức B, tập trung F06/F12/F13 trước". Không tự tạo
-file mẫu giả để "cho xong việc". Quay lại khi có file mẫu thật hoặc người dùng yêu cầu tiếp.
+**P4 — F10 Mức B (audio/video, cập nhật 2026-09-21)**: quyết định tạm hoãn 17/09 vì thiếu PDF
+MISA thật vẫn được giữ trong lịch sử, nhưng baseline an toàn đã được triển khai và kiểm chứng bằng
+WAV nhúng thật: `/Movie`, `/Screen` Rendition và `/RichMedia` chỉ được lấy từ `/EF` nội bộ, sniff
+magic byte, allowlist media browser, giới hạn 20 MiB/object và 50 MiB/PDF; URL/path ngoài PDF,
+JavaScript, Launch và Flash đều bị bỏ qua. Reader không autoplay, pause khi lật khỏi trang, và media
+đi qua đúng password/Private grant + HTTP Range. Chưa coi F10 hoàn tất cho đến khi UAT PDF MISA có
+cả audio/video, đặc biệt là codec video thực tế.
 
 **P4 — F06 (Google Analytics GA4) — ĐÃ XONG (2026-09-17)**, xem chi tiết ở MEMORYBANK.md:
 phát hiện 2 cột cần dùng (`book_settings.ga_id`, `tenants.default_ga_id`) đã có sẵn từ schema
@@ -184,9 +194,9 @@ tạm ngưng/kích hoạt lại 1 tenant và khóa/mở 1 tài khoản qua UI th
 trên, sửa, xác nhận lại thành công + audit log đúng), lọc job theo trạng thái, tìm kiếm
 sách, resize mobile 375×812 không vỡ layout — không hồi quy 88/88 test cũ.
 
-Đến đây P4 đã hoàn tất toàn bộ phạm vi ban đầu ("Hyperlink hoàn chỉnh, media trong phạm vi
-PoC, GA4, dashboard, Admin") trừ F10 Mức B (tạm hoãn, chờ file mẫu PDF thật có audio/video)
-và F10 Mức C (chủ động bỏ qua theo đúng PLAN.md, không tự nhận là đã làm).
+Đến đây P4 đã hoàn tất hyperlink, GA4, dashboard và Admin; F10 Mức B có baseline embedded-media
+an toàn nhưng vẫn chờ corpus PDF MISA audio/video để nghiệm thu codec thật; F10 Mức C chủ động bỏ
+qua theo đúng PLAN.md, không tự nhận là đã làm.
 
 **F13-rút gọn (2026-09-17)**: người dùng phản hồi Admin dashboard "phức tạp quá" (Admin dùng
 không phải dân kỹ thuật) — rút Tổng quan còn 2 số (Số sách đã đăng + Lượt mở), bỏ hẳn các
@@ -262,3 +272,41 @@ Không khóa phiên bản stable khi còn lỗi mất dữ liệu, vượt quy�
 - H4 / integrations: social trực tiếp đã kiểm chứng.
 
 Tên/tag thực chỉ tạo sau khi người dùng nói “ổn rồi” cho phiên bản cụ thể và xác minh chất lượng tương ứng.
+
+## Tiếp quản Codex — 21/09/2026
+- Đợt 1: SEC-02 verified; SEC-01/03/UI-01 verified một phần, còn điều kiện security trong docs/audits/20260921-codex-followup.md.
+- Đợt 2 core: PDF process isolation, deadline/budgets, stream upload, tenant source quota, job lease/fencing/retry và EDGE-01 đã có code + Docker regression.
+- Đợt 2 storage: accounting tổng source + derived asset, quota transaction-safe khi worker finalize,
+  đối soát physical usage và collector attempt mồ côi có retention đã được thêm ở migration 0020.
+  Redis-down rate limit nay co deadline, fallback bounded va chong password spraying theo source.
+- Chưa chốt stable; tiếp theo là reader/security residual, tính đúng đắn nội dung và vận hành theo báo cáo tiếp quản.
+
+## Candidate Codex 21/09/2026 — hoàn tất các residual ưu tiên
+
+Đã hoàn tất reader session scoped/revision-pinned, analytics idempotent, cache transition
+an toàn, CropBox/Rotate + URL sanitizer, thumbnail chia sẻ 16:9, public URL canonical,
+windowed image loading/mobile accessibility, phân trang keyset Admin và runbook backup/restore.
+Tất cả được kiểm chứng trên Docker stack riêng; xem `MEMORYBANK.md` và
+`handoffs/HF-20260921-02.md`. Mốc này là **candidate**, không phải stable: chờ người dùng
+xác nhận và vẫn còn device/mobile thật, proxy/CDN, retention và object storage production.
+
+## Candidate Codex 21/09/2026 — storage accounting và degraded-security
+
+Candidate được nâng thêm migration `0020_storage_accounting.sql`: quota tenant tính cả PDF nguồn
+và asset render, worker khóa theo tenant trước khi commit derived assets, đối soát logical/physical
+usage, và chỉ xóa temporary upload hoặc `attempts/` không được DB tham chiếu sau retention. Redis
+rate-limit có command deadline 500ms, fallback per-process bị giới hạn bộ nhớ, cap theo source để
+chặn password spraying, và HMAC email/IP trước khi ghi key. Các kết quả thực tế và điều kiện chưa
+đủ để stable được lưu trong handoff candidate kế tiếp; vẫn cần device matrix thật, kiểm chứng
+proxy/CDN theo topology DevOps, PDF audio/video mẫu và object storage/HA trước production MISA.
+Hồ sơ candidate hiện hành: `handoffs/HF-20260921-03.md`; chưa gắn stable tag.
+
+## Candidate Codex 21/09/2026 — Dashboard HttpOnly session / CSRF
+
+Commit `882edd457d6bc76f523fcd617f4b829802929006` hoàn tất residual Dashboard JWT browser: cookie
+HttpOnly cùng origin, CSRF cho thao tác ghi, CORS origin explicit và logout không cache; Bearer API
+vẫn tương thích. Docker edge cô lập đạt 125 assertion qua các nhóm cookie (13), P1 (14), P2 (21),
+P3 (35), F16 (12), security (14), media (16), cùng production builds. Đây là candidate để DevOps
+MISA dựng Docker pilot/staging; không phải stable. Yêu cầu trước production: TLS với
+`AUTH_COOKIE_SECURE=true`, topology proxy đúng, secret manager, backup restore drill, device matrix
+và corpus PDF MISA. Xem `handoffs/HF-20260921-06.md`.

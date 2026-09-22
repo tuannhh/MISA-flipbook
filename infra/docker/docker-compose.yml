@@ -1,13 +1,8 @@
 name: misa-flipbook
 
-# P1: postgres, redis, migrate (one-shot), api, dispatcher, pdf-worker.
-# CHUA co: proxy (nginx) va apps/web (Next.js) - chua co UI/reader de phuc vu, se
-# them o P2/P3 khi co gi do that su can proxy. Ghi ro trong MEMORYBANK.md, khong
-# tu nhan da xong toan bo "Docker Compose pilot" cua ARCHITECTURE.md muc 8.
-#
-# Chi postgres/redis mo port ra 127.0.0.1 de dev/test cuc bo; api mo port de goi
-# thu (chua co proxy). dispatcher/pdf-worker KHONG mo port ra host - chi goi duoc
-# tu trong mang cua compose (ARCHITECTURE.md: "DB/Redis/worker dung mang noi bo").
+# Pilot serves web and API through one Nginx reverse proxy. API/web have no host
+# ports, so request IP forwarding has one known, testable hop. Postgres/Redis stay
+# bound to loopback only for local diagnostics; workers are internal-only.
 
 services:
   postgres:
@@ -68,17 +63,37 @@ services:
       # SEC-03: rate limit dang nhap/mat khau sach (xem common/rate-limit) - dung chung
       # instance Redis voi dispatcher/worker-convert, khong them ha tang moi.
       REDIS_URL: redis://redis:6379
+      RATE_LIMIT_COMMAND_TIMEOUT_MS: ${RATE_LIMIT_COMMAND_TIMEOUT_MS:-500}
+      RATE_LIMIT_CONNECT_TIMEOUT_MS: ${RATE_LIMIT_CONNECT_TIMEOUT_MS:-500}
+      RATE_LIMIT_FALLBACK_MAX_KEYS: ${RATE_LIMIT_FALLBACK_MAX_KEYS:-10000}
+      RATE_LIMIT_KEY_SECRET: ${RATE_LIMIT_KEY_SECRET:-}
+      LOGIN_MAX_ATTEMPTS: ${LOGIN_MAX_ATTEMPTS:-10}
+      LOGIN_IP_MAX_ATTEMPTS: ${LOGIN_IP_MAX_ATTEMPTS:-30}
+      LOGIN_WINDOW_SECONDS: ${LOGIN_WINDOW_SECONDS:-900}
+      BOOK_PASSWORD_MAX_ATTEMPTS: ${BOOK_PASSWORD_MAX_ATTEMPTS:-8}
+      BOOK_PASSWORD_IP_MAX_ATTEMPTS: ${BOOK_PASSWORD_IP_MAX_ATTEMPTS:-32}
+      BOOK_PASSWORD_LOCKOUT_MINUTES: ${BOOK_PASSWORD_LOCKOUT_MINUTES:-15}
+      TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-1}
       JWT_SECRET: ${JWT_SECRET:?can dat JWT_SECRET trong .env}
       JWT_EXPIRES_IN_SECONDS: ${JWT_EXPIRES_IN_SECONDS:-28800}
+      # false is allowed only for local HTTP Docker pilot. Production HTTPS must set true.
+      AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-false}
       STORAGE_ROOT: /data/storage
       PDF_MAX_BYTES: ${PDF_MAX_BYTES:-209715200}
+      PDF_UPLOAD_CONCURRENCY: ${PDF_UPLOAD_CONCURRENCY:-4}
+      PDF_UPLOAD_TIMEOUT_MS: ${PDF_UPLOAD_TIMEOUT_MS:-120000}
+      SHARE_THUMBNAIL_MAX_BYTES: ${SHARE_THUMBNAIL_MAX_BYTES:-8388608}
+      SHARE_THUMBNAIL_TIMEOUT_MS: ${SHARE_THUMBNAIL_TIMEOUT_MS:-60000}
+      PDF_WORKER_URL: http://pdf-worker:8000
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?can dat INTERNAL_API_TOKEN trong .env}
+      TENANT_SOURCE_BYTES: ${TENANT_SOURCE_BYTES:-10737418240}
+      TENANT_STORAGE_BYTES: ${TENANT_STORAGE_BYTES:-53687091200}
+      TENANT_PENDING_JOBS: ${TENANT_PENDING_JOBS:-20}
       PDF_PIPELINE_VERSION: ${PDF_PIPELINE_VERSION:-v1}
-      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3001}
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:8080}
       PORT: "3000"
     volumes:
       - storage_data:/data/storage
-    ports:
-      - "127.0.0.1:3000:3000"
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 10s
@@ -90,16 +105,13 @@ services:
           cpus: "1"
           memory: 512M
 
-  # web (FE): app Next.js RIENG, chi goi api qua HTTP/JSON (Bearer JWT, CORS) -
-  # khong SSR-proxy, khong dung chung process/DB voi BE ("tach rieng FE va BE").
-  # NEXT_PUBLIC_API_BASE_URL phai la URL trinh duyet cua NGUOI DUNG goi toi duoc
-  # (vd http://localhost:3000 khi test tren may dev) - KHONG dung hostname noi bo
-  # cua Docker network (vd http://api:3000), vi trinh duyet chay ngoai mang do.
+  # web (FE) stays a separate process. Browser calls /api through proxy; server
+  # metadata uses API_INTERNAL_BASE_URL and never resolves the browser-relative path.
   web:
     build:
       context: ../../apps/web
       args:
-        NEXT_PUBLIC_API_BASE_URL: ${WEB_PUBLIC_API_BASE_URL:-http://localhost:3000}
+        NEXT_PUBLIC_API_BASE_URL: ${WEB_PUBLIC_API_BASE_URL:-/api}
         NEXT_PUBLIC_FACEBOOK_APP_ID: ${WEB_PUBLIC_FACEBOOK_APP_ID:-}
     environment:
       # F08: generateMetadata (Open Graph, server-side) chay code TRONG container web,
@@ -111,13 +123,36 @@ services:
     depends_on:
       api:
         condition: service_healthy
-    ports:
-      - "127.0.0.1:3001:3001"
     deploy:
       resources:
         limits:
           cpus: "0.5"
           memory: 256M
+
+  proxy:
+    build:
+      context: ./proxy
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+      web:
+        condition: service_started
+    ports:
+      - "127.0.0.1:8080:8080"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      # BusyBox resolves localhost to IPv6 first while this minimal config listens on IPv4.
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128M
 
   pdf-worker:
     build:
@@ -126,6 +161,19 @@ services:
     environment:
       STORAGE_ROOT: /data/storage
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?can dat INTERNAL_API_TOKEN trong .env}
+      PDF_MAX_BYTES: ${PDF_MAX_BYTES:-209715200}
+      PDF_MAX_PAGES: ${PDF_MAX_PAGES:-500}
+      PDF_MAX_PAGE_PIXELS: ${PDF_MAX_PAGE_PIXELS:-8000000}
+      PDF_MAX_OUTPUT_BYTES: ${PDF_MAX_OUTPUT_BYTES:-536870912}
+      PDF_MEDIA_MAX_BYTES: ${PDF_MEDIA_MAX_BYTES:-20971520}
+      PDF_MEDIA_TOTAL_BYTES: ${PDF_MEDIA_TOTAL_BYTES:-52428800}
+      PDF_PROCESS_MEMORY_MB: ${PDF_PROCESS_MEMORY_MB:-512}
+      PDF_MAX_PROCESSES: ${PDF_MAX_PROCESSES:-1}
+      PDF_TIMEOUT_SECONDS: ${PDF_TIMEOUT_SECONDS:-600}
+      SHARE_THUMBNAIL_MAX_PIXELS: ${SHARE_THUMBNAIL_MAX_PIXELS:-32000000}
+    init: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
     volumes:
       - storage_data:/data/storage
     # KHONG publish port ra host - chi dispatcher (cung mang compose) goi duoc.
@@ -139,6 +187,7 @@ services:
         limits:
           cpus: "1"
           memory: 1G
+          pids: 64
 
   # dispatcher: CHI claim job tu Postgres outbox roi day vao BullMQ/Redis - khong
   # goi pdf-worker, khong xu ly. Neu code xu ly (worker-convert) co bug/crash, claim
@@ -190,6 +239,12 @@ services:
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN}
       STORAGE_ROOT: /data/storage
       CONCURRENCY: ${WORKER_CONVERT_CONCURRENCY:-2}
+      JOB_ATTEMPTS: ${DISPATCHER_JOB_ATTEMPTS:-3}
+      JOB_LEASE_SECONDS: ${JOB_LEASE_SECONDS:-60}
+      PDF_TIMEOUT_SECONDS: ${PDF_TIMEOUT_SECONDS:-600}
+      TENANT_STORAGE_BYTES: ${TENANT_STORAGE_BYTES:-53687091200}
+      STORAGE_ORPHAN_RETENTION_SECONDS: ${STORAGE_ORPHAN_RETENTION_SECONDS:-86400}
+      STORAGE_RECONCILE_INTERVAL_MS: ${STORAGE_RECONCILE_INTERVAL_MS:-21600000}
     volumes:
       - storage_data:/data/storage
     deploy:

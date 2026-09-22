@@ -10,13 +10,16 @@ Yeu cau: reportlab, pypdf (da cai qua pip trong buoc PoC).
 
 from __future__ import annotations
 
+import io
 import pathlib
+import wave
 
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
 from pypdf import PdfReader, PdfWriter
+from pypdf.generic import ArrayObject, DecodedStreamObject, DictionaryObject, NameObject, NumberObject, TextStringObject
 
 OUT_DIR = pathlib.Path(__file__).parent
 WIN_FONT_DIR = pathlib.Path(r"C:\Windows\Fonts")
@@ -148,6 +151,41 @@ def make_many_pages(path: pathlib.Path, font_name: str, n_pages: int = 30) -> No
     c.save()
 
 
+
+def make_embedded_audio(path: pathlib.Path) -> None:
+    """One valid WAV nested in a standard PDF /Movie annotation for F10 E2E."""
+    audio = io.BytesIO()
+    with wave.open(audio, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(1)
+        wav.setframerate(8000)
+        wav.writeframes(b"\x80" * 800)
+    writer = PdfWriter()
+    page = writer.add_blank_page(width=400, height=300)
+    stream = DecodedStreamObject()
+    stream.set_data(audio.getvalue())
+    stream[NameObject("/Type")] = NameObject("/EmbeddedFile")
+    stream[NameObject("/Subtype")] = NameObject("/audio#2Fwav")
+    stream_ref = writer._add_object(stream)
+    file_spec = DictionaryObject(
+        {
+            NameObject("/Type"): NameObject("/Filespec"),
+            NameObject("/F"): TextStringObject("embedded-audio.wav"),
+            NameObject("/EF"): DictionaryObject({NameObject("/F"): stream_ref}),
+        }
+    )
+    movie = DictionaryObject({NameObject("/F"): writer._add_object(file_spec)})
+    annotation = DictionaryObject(
+        {
+            NameObject("/Type"): NameObject("/Annot"),
+            NameObject("/Subtype"): NameObject("/Movie"),
+            NameObject("/Rect"): ArrayObject([NumberObject(60), NumberObject(90), NumberObject(340), NumberObject(160)]),
+            NameObject("/Movie"): writer._add_object(movie),
+        }
+    )
+    page[NameObject("/Annots")] = ArrayObject([writer._add_object(annotation)])
+    with path.open("wb") as handle:
+        writer.write(handle)
 def make_encrypted(src: pathlib.Path, dst: pathlib.Path, user_pwd: str = "test1234") -> None:
     reader = PdfReader(str(src))
     writer = PdfWriter()
@@ -191,6 +229,7 @@ def main() -> None:
     make_scanned_like(scanned)
     make_many_pages(many_pages, font_name, n_pages=30)
     make_many_pages(OUT_DIR / "sample_stress_150pages.pdf", font_name, n_pages=150)
+    make_embedded_audio(OUT_DIR / "sample_embedded_audio.pdf")
     make_encrypted(vi_text, encrypted)
     make_corrupted(vi_text, corrupted)
     make_wrong_mime(wrong_mime)

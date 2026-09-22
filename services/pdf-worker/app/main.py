@@ -1,67 +1,125 @@
-"""FastAPI noi bo cho pdf-worker.
-
-Chi duoc goi tu dispatcher qua mang noi bo Docker Compose (khong public). Xac
-thuc bang shared-secret header don gian - du cho pilot; production nen doi
-sang mTLS hoac network policy chat hon (ghi trong MEMORYBANK.md nhu viec con
-mo). Worker KHONG tu fetch file tu URL ngoai - chi doc file da co san tren
-volume storage dung chung, dung ARCHITECTURE.md muc 2 ("worker khong co
-outbound network mac dinh").
-"""
-
+"""Internal supervisor: bounded admission, isolated parser, kill AND reap on timeout."""
 from __future__ import annotations
-
+import asyncio
+import hmac
+import json
 import os
 import pathlib
-
+import shutil
+import sys
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
 
-from .convert import ConversionError, convert_pdf
-
 STORAGE_ROOT = pathlib.Path(os.environ["STORAGE_ROOT"]).resolve()
 INTERNAL_API_TOKEN = os.environ["INTERNAL_API_TOKEN"]
-
+TIMEOUT_SECONDS = int(os.getenv("PDF_TIMEOUT_SECONDS", "600"))
+MAX_PROCESSES = int(os.getenv("PDF_MAX_PROCESSES", "1"))
+if TIMEOUT_SECONDS < 1 or MAX_PROCESSES < 1:
+    raise ValueError("PDF limits must be positive")
+slots = asyncio.Semaphore(MAX_PROCESSES)
 app = FastAPI(title="MISA Flipbook PDF Worker (internal)")
 
-
 class ConvertRequest(BaseModel):
-    source_key: str  # duong dan tuong doi trong STORAGE_ROOT, vd tenant/book/revision/source.pdf
-    output_key: str  # thu muc tuong doi de ghi anh + manifest
+    source_key: str
+    output_key: str
     pipeline_version: str
     password: str | None = None
 
+class ThumbnailRequest(BaseModel):
+    source_key: str
+    output_key: str
 
-def _resolve_safe(relative_key: str) -> pathlib.Path:
-    full = (STORAGE_ROOT / relative_key).resolve()
-    if not str(full).startswith(str(STORAGE_ROOT) + os.sep) and full != STORAGE_ROOT:
-        raise HTTPException(status_code=400, detail="key khong hop le (path traversal?).")
+def _resolve_safe(key: str) -> pathlib.Path:
+    full = (STORAGE_ROOT / key).resolve()
+    if full == STORAGE_ROOT or not full.is_relative_to(STORAGE_ROOT):
+        raise HTTPException(400, "key khong hop le.")
     return full
 
-
-def _check_auth(x_internal_token: str | None) -> None:
-    if x_internal_token != INTERNAL_API_TOKEN:
-        raise HTTPException(status_code=401, detail="Thieu hoac sai internal token.")
-
+async def run_child(payload: dict, timeout: float):
+    process = await asyncio.create_subprocess_exec(
+        sys.executable, "-m", "app.runner", stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+    try:
+        await asyncio.wait_for(process.communicate(json.dumps(payload).encode()), timeout)
+        return process.returncode
+    finally:
+        if process.returncode is None:
+            process.kill()
+        await process.wait()
 
 @app.get("/internal/health")
-def health():
+async def health():
     return {"status": "ok"}
 
-
 @app.post("/internal/convert")
-def convert(req: ConvertRequest, x_internal_token: str | None = Header(default=None)):
-    _check_auth(x_internal_token)
+async def convert(req: ConvertRequest, x_internal_token: str | None = Header(default=None)):
+    if not hmac.compare_digest(x_internal_token or "", INTERNAL_API_TOKEN):
+        raise HTTPException(401, "Thieu hoac sai internal token.")
+    source = _resolve_safe(req.source_key)
+    output = _resolve_safe(req.output_key)
+    if not source.is_file() or source.is_relative_to(output):
+        raise HTTPException(400, "Source/output khong hop le.")
+    if slots.locked():
+        raise HTTPException(503, "PDF worker dang ban.", headers={"Retry-After": "5"})
+    async with slots:
+        try:
+            output.mkdir(parents=True, exist_ok=False)
+        except FileExistsError:
+            raise HTTPException(409, "Output cua lan xu ly nay da ton tai.")
+        result_path = output / "result.json"
+        success = False
+        try:
+            code = await run_child({"source": str(source), "output": str(output),
+                                    "result": str(result_path), "pipeline_version": req.pipeline_version,
+                                    "password": req.password}, TIMEOUT_SECONDS)
+            if code != 0 or not result_path.exists():
+                return {"status": "error", "reason": "parser_failed",
+                        "message": "PDF khong the xu ly trong gioi han tai nguyen."}
+            if result_path.stat().st_size > 16 * 1024 * 1024:
+                return {"status": "error", "reason": "resource_limit", "message": "Manifest qua lon."}
+            result = json.loads(result_path.read_text(encoding="utf-8"))
+            success = result.get("status") == "ok"
+            result_path.unlink()
+            return result
+        except asyncio.TimeoutError:
+            return {"status": "error", "reason": "timeout", "message": "PDF xu ly qua thoi gian cho phep."}
+        finally:
+            # This attempt directory was created exclusively above; child is reaped.
+            if not success:
+                shutil.rmtree(output, ignore_errors=True)
 
-    source_path = _resolve_safe(req.source_key)
-    output_dir = _resolve_safe(req.output_key)
-
-    try:
-        manifest = convert_pdf(
-            source_path=source_path,
-            output_dir=output_dir,
-            pipeline_version=req.pipeline_version,
-            password=req.password,
-        )
-        return {"status": "ok", "manifest": manifest}
-    except ConversionError as e:
-        return {"status": "error", "reason": e.reason, "message": e.message}
+@app.post("/internal/share-thumbnail")
+async def share_thumbnail(req: ThumbnailRequest, x_internal_token: str | None = Header(default=None)):
+    if not hmac.compare_digest(x_internal_token or "", INTERNAL_API_TOKEN):
+        raise HTTPException(401, "Thieu hoac sai internal token.")
+    source = _resolve_safe(req.source_key)
+    output = _resolve_safe(req.output_key)
+    if not source.is_file() or source.is_relative_to(output):
+        raise HTTPException(400, "Source/output khong hop le.")
+    if slots.locked():
+        raise HTTPException(503, "PDF worker dang ban.", headers={"Retry-After": "5"})
+    async with slots:
+        try:
+            output.mkdir(parents=True, exist_ok=False)
+        except FileExistsError:
+            raise HTTPException(409, "Output cua lan xu ly nay da ton tai.")
+        result_path = output / "result.json"
+        success = False
+        try:
+            code = await run_child(
+                {"operation": "share_thumbnail", "source": str(source), "output": str(output / "cover.webp"), "result": str(result_path)},
+                min(TIMEOUT_SECONDS, 60),
+            )
+            if code != 0 or not result_path.exists():
+                return {"status": "error", "reason": "processor_failed", "message": "Anh khong the xu ly trong gioi han tai nguyen."}
+            result = json.loads(result_path.read_text(encoding="utf-8"))
+            success = result.get("status") == "ok" and (output / "cover.webp").is_file()
+            result_path.unlink()
+            if not success:
+                return result
+            return {"status": "ok", "object_key": f"{req.output_key}/cover.webp", "bytes": result["bytes"]}
+        except asyncio.TimeoutError:
+            return {"status": "error", "reason": "timeout", "message": "Xu ly anh qua thoi gian cho phep."}
+        finally:
+            if not success:
+                shutil.rmtree(output, ignore_errors=True)

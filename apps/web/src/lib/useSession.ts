@@ -1,17 +1,15 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { getToken, getTenantId, getIsAdmin, clearSession } from "@/lib/auth";
+import { apiFetch } from "@/lib/api";
+import { COOKIE_SESSION_TOKEN, clearSession, getTenantId, setIsAdmin, setTenantId } from "@/lib/auth";
+import type { Me } from "@/lib/types";
 
-/** Bao ve trang can dang nhap: chuyen ve /login neu chua co token/tenant.
- * FE la SPA thuan tuy, khong co middleware SSR kiem tra session (token nam o
- * localStorage cua trinh duyet, BE khong biet gi ve no ngoai viec xac thuc JWT).
- *
- * F13-simplification: cho phep override tenantId qua query param `?tenantId=` - dung
- * khi Admin (co the KHONG thuoc tenant nao, khong co gi trong localStorage) mo trang
- * chi tiet 1 sach tu danh sach Admin de "Xem/Sua". AN TOAN vi BE (DbContextInterceptor)
- * van tu kiem tra: nguoi khong phai Admin gui tenantId khong phai cua minh se bi 403
- * (khong co membership active) - override nay chi la tien ich UI, khong phai lop bao ve. */
+/**
+ * Browser Dashboard authentication is verified against the HttpOnly cookie by
+ * `/me`; no Dashboard JWT is recovered from JavaScript storage. Tenant/admin
+ * values are non-secret session UI state and the API still authorizes each call.
+ */
 export function useSession() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -21,48 +19,77 @@ export function useSession() {
   const [isAdmin, setIsAdminState] = useState(false);
 
   useEffect(() => {
-    const t = getToken();
-    const tid = searchParams.get("tenantId") || getTenantId();
-    if (!t || !tid) {
-      router.replace("/login");
-      return;
-    }
-    setTokenState(t);
-    setTenantIdState(tid);
-    setIsAdminState(getIsAdmin());
-    setReady(true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    let cancelled = false;
+    void (async () => {
+      try {
+        const me = await apiFetch<Me>("/me");
+        const requestedTenantId = searchParams.get("tenantId");
+        const activeMemberships = me.memberships.filter((membership) => membership.status === "active");
+        const selectedTenantId = requestedTenantId ?? getTenantId() ?? (activeMemberships.length === 1 ? activeMemberships[0].tenantId : null);
+        if (!selectedTenantId) {
+          router.replace(me.isSystemAdmin ? "/admin" : "/login");
+          return;
+        }
+        if (cancelled) return;
+        setTenantId(selectedTenantId);
+        setIsAdmin(me.isSystemAdmin);
+        setTokenState(COOKIE_SESSION_TOKEN);
+        setTenantIdState(selectedTenantId);
+        setIsAdminState(me.isSystemAdmin);
+        setReady(true);
+      } catch {
+        clearSession();
+        router.replace("/login");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [router, searchParams]);
 
   function logout() {
-    clearSession();
-    router.replace("/login");
+    void apiFetch("/auth/logout", { method: "POST" }).catch(() => undefined).finally(() => {
+      clearSession();
+      router.replace("/login");
+    });
   }
 
   return { ready, token, tenantId, isAdmin, logout };
 }
 
-/** F13: bao ve man hinh /admin/* - CHI can token (Admin he thong co the khong
- * thuoc tenant nao). isAdmin o day chi la tien ich UI; moi API /admin/* van tu
- * assertAdmin() lai o BE, khong tin co ban cache client. */
+/** System Admin pages need only the HttpOnly Dashboard cookie, not a tenant. */
 export function useAdminSession() {
   const router = useRouter();
   const [ready, setReady] = useState(false);
   const [token, setTokenState] = useState<string | null>(null);
 
   useEffect(() => {
-    const t = getToken();
-    if (!t) {
-      router.replace("/login");
-      return;
-    }
-    setTokenState(t);
-    setReady(true);
+    let cancelled = false;
+    void apiFetch<Me>("/me")
+      .then((me) => {
+        if (cancelled) return;
+        if (!me.isSystemAdmin) {
+          router.replace("/dashboard");
+          return;
+        }
+        setIsAdmin(true);
+        setTokenState(COOKIE_SESSION_TOKEN);
+        setReady(true);
+      })
+      .catch(() => {
+        clearSession();
+        router.replace("/login");
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [router]);
 
   function logout() {
-    clearSession();
-    router.replace("/login");
+    void apiFetch("/auth/logout", { method: "POST" }).catch(() => undefined).finally(() => {
+      clearSession();
+      router.replace("/login");
+    });
   }
 
   return { ready, token, logout };

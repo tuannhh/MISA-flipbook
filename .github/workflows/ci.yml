@@ -33,8 +33,9 @@ jobs:
           INTERNAL_API_TOKEN=ci_internal_token_${{ github.run_id }}
           PDF_MAX_BYTES=209715200
           PDF_PIPELINE_VERSION=v1
-          CORS_ORIGIN=http://localhost:3001
-          WEB_PUBLIC_API_BASE_URL=http://localhost:3000
+          CORS_ORIGIN=http://localhost:8080
+          TRUST_PROXY_HOPS=1
+          WEB_PUBLIC_API_BASE_URL=/api
           DISPATCHER_POLL_INTERVAL_MS=1000
           DISPATCHER_RECONCILE_INTERVAL_MS=10000
           DISPATCHER_JOB_ATTEMPTS=3
@@ -74,19 +75,37 @@ jobs:
       - name: Run HTTP-level API e2e tests (P1)
         working-directory: tests/integration
         env:
-          API_BASE_URL: http://127.0.0.1:3000
+          API_BASE_URL: http://127.0.0.1:8080/api
           ADMIN_EMAIL: admin@misa.local
           ADMIN_PASSWORD: ChangeThisAdminPw123!
         run: node api_e2e.test.js
 
+      - name: Run Dashboard cookie / CSRF / CORS regression
+        working-directory: tests/integration
+        env:
+          API_BASE_URL: http://127.0.0.1:8080
+          CORS_ORIGIN: http://localhost:8080
+          SEED_ADMIN_EMAIL: admin@misa.local
+          SEED_ADMIN_PASSWORD: ChangeThisAdminPw123!
+        run: node cookie_session_security.test.js
+
       - name: Run publish/preview/public-reader e2e tests (P2)
         working-directory: tests/integration
         env:
-          API_BASE_URL: http://127.0.0.1:3000
+          API_BASE_URL: http://127.0.0.1:8080/api
           ADMIN_EMAIL: admin@misa.local
           ADMIN_PASSWORD: ChangeThisAdminPw123!
           JOB_TIMEOUT_MS: 60000
         run: node p2_e2e.test.js
+
+      - name: Run embedded PDF media e2e (F10 level B)
+        working-directory: tests/integration
+        env:
+          API_BASE_URL: http://127.0.0.1:8080/api
+          SEED_ADMIN_EMAIL: admin@misa.local
+          SEED_ADMIN_PASSWORD: ChangeThisAdminPw123!
+          JOB_TIMEOUT_MS: 60000
+        run: node pdf_media_e2e.test.js
 
       # QA-01 (audit codex 21/09/2026): P3/F16 da co tu lau nhung chua tung chay trong
       # CI - chi chay thu cong tren may dev, khong co bang chung tu dong hoa. Them vao
@@ -94,7 +113,7 @@ jobs:
       - name: Run password protection / download e2e tests (P3)
         working-directory: tests/integration
         env:
-          API_BASE_URL: http://127.0.0.1:3000
+          API_BASE_URL: http://127.0.0.1:8080/api
           SEED_ADMIN_EMAIL: admin@misa.local
           SEED_ADMIN_PASSWORD: ChangeThisAdminPw123!
           JOB_TIMEOUT_MS: 60000
@@ -103,7 +122,7 @@ jobs:
       - name: Run Publish/Private visibility e2e tests (F16)
         working-directory: tests/integration
         env:
-          API_BASE_URL: http://127.0.0.1:3000
+          API_BASE_URL: http://127.0.0.1:8080/api
           DATABASE_URL: postgres://misa_admin:ci_pg_password_${{ github.run_id }}@127.0.0.1:5432/misa_flipbook
           SEED_ADMIN_EMAIL: admin@misa.local
           SEED_ADMIN_PASSWORD: ChangeThisAdminPw123!
@@ -113,7 +132,7 @@ jobs:
       - name: Run UAT gap-fill e2e tests (P5)
         working-directory: tests/integration
         env:
-          API_BASE_URL: http://127.0.0.1:3000
+          API_BASE_URL: http://127.0.0.1:8080/api
           SEED_ADMIN_EMAIL: admin@misa.local
           SEED_ADMIN_PASSWORD: ChangeThisAdminPw123!
           JOB_TIMEOUT_MS: 60000
@@ -124,12 +143,58 @@ jobs:
       - name: Run security audit regression tests (SEC-01/02/03, codex 2026-09-21)
         working-directory: tests/integration
         env:
-          API_BASE_URL: http://127.0.0.1:3000
+          API_BASE_URL: http://127.0.0.1:8080/api
           DATABASE_URL: postgres://misa_admin:ci_pg_password_${{ github.run_id }}@127.0.0.1:5432/misa_flipbook
           SEED_ADMIN_EMAIL: admin@misa.local
           SEED_ADMIN_PASSWORD: ChangeThisAdminPw123!
           JOB_TIMEOUT_MS: 60000
         run: node sec_audit_20260921.test.js
+
+      - name: Run isolated PDF supervisor regression
+        working-directory: infra/docker
+        run: |
+          docker compose cp ../../services/pdf-worker/tests pdf-worker:/app/tests
+          docker compose exec -T pdf-worker python -m unittest discover -s tests -v
+
+      - name: Run job lease, replay and recovery regression
+        working-directory: infra/docker
+        run: |
+          docker compose cp ../../tests/integration/pipeline_jobs.test.js worker-convert:/app/pipeline_jobs.test.js
+          docker compose cp ../../apps/dispatcher/src worker-convert:/app/dispatcher
+          docker compose stop dispatcher
+          trap 'docker compose start dispatcher' EXIT
+          docker compose exec -T worker-convert node /app/pipeline_jobs.test.js
+
+      - name: Run storage accounting and orphan-retention regression
+        working-directory: infra/docker
+        run: |
+          docker compose cp ../../tests/integration/storage_reconciliation.test.js worker-convert:/app/storage_reconciliation.test.js
+          docker compose exec -T worker-convert node /app/storage_reconciliation.test.js
+
+      - name: Run upload concurrency, quota and disconnect regression
+        working-directory: infra/docker
+        run: |
+          docker compose cp ../../tests api:/app/tests
+          docker compose exec -T -e NODE_PATH=/app/node_modules \
+            -e TEST_DATABASE_URL=postgres://misa_admin:ci_pg_password_${{ github.run_id }}@postgres:5432/misa_flipbook \
+            api node /app/tests/integration/pipeline_upload.test.js
+
+      - name: Run reverse-proxy and trust-proxy regression
+        working-directory: tests/integration
+        env:
+          API_BASE_URL: http://127.0.0.1:8080/api
+        run: node proxy_security.test.js
+
+      - name: Run rate-limit fallback regression while Redis is unavailable
+        working-directory: infra/docker
+        env:
+          API_BASE_URL: http://127.0.0.1:8080/api
+          SEED_ADMIN_EMAIL: admin@misa.local
+          SEED_ADMIN_PASSWORD: ChangeThisAdminPw123!
+        run: |
+          docker compose stop redis
+          trap 'docker compose start redis' EXIT
+          node ../../tests/integration/rate_limit_fallback.test.js
 
       - name: Dump logs on failure
         if: failure()
