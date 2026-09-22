@@ -40,7 +40,20 @@
     "createBookOwnerNote": "Flipbook mới sẽ thuộc tài khoản Admin hiện tại. Bạn sẽ được chuyển sang bước tải PDF ngay sau khi tạo.",
     "noActiveTenant": "Cần có ít nhất một đơn vị đang hoạt động để tạo flipbook.",
     "noticeBookCreated": "Đã tạo flipbook. Hãy tải PDF để tiếp tục.",
-    "errorCreateBook": "Không tạo được flipbook."
+    "errorCreateBook": "Không tạo được flipbook.",
+    "createCreator": "+ Tạo Creator",
+    "creatorSectionTitle": "Tạo đơn vị & Creator",
+    "creatorSectionDesc": "Tạo một đơn vị (tenant) mới cùng tài khoản Creator đầu tiên của đơn vị đó. Creator sau khi đăng nhập có thể tự tạo sách trong đơn vị của mình.",
+    "createCreatorDialogTitle": "Tạo đơn vị & Creator mới",
+    "tenantNameLabel": "Tên đơn vị",
+    "tenantNamePlaceholder": "VD: Phòng Hành chính",
+    "creatorEmailLabel": "Email Creator",
+    "creatorEmailPlaceholder": "creator@congty.vn",
+    "creatorPasswordLabel": "Mật khẩu tạm thời",
+    "creatorPasswordPlaceholder": "Tối thiểu 8 ký tự",
+    "createCreatorNote": "Đơn vị mới sẽ được tạo cùng lúc với tài khoản Creator này. Gửi email và mật khẩu cho Creator để họ tự đăng nhập và đổi mật khẩu.",
+    "noticeCreatorCreated": "Đã tạo đơn vị và tài khoản Creator.",
+    "errorCreateCreator": "Không tạo được đơn vị/Creator."
   },
   "common": {
     "appName": "MISA Flipbook",

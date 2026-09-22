@@ -40,7 +40,20 @@
     "createBookOwnerNote": "The new flipbook belongs to the current Admin account. You will go straight to PDF upload after it is created.",
     "noActiveTenant": "At least one active tenant is needed to create a flipbook.",
     "noticeBookCreated": "Flipbook created. Upload a PDF to continue.",
-    "errorCreateBook": "Couldn't create the flipbook."
+    "errorCreateBook": "Couldn't create the flipbook.",
+    "createCreator": "+ New creator",
+    "creatorSectionTitle": "Create tenant & creator",
+    "creatorSectionDesc": "Create a new tenant along with its first Creator account. Once logged in, the Creator can create books within their own tenant.",
+    "createCreatorDialogTitle": "Create new tenant & creator",
+    "tenantNameLabel": "Tenant name",
+    "tenantNamePlaceholder": "e.g. Admin Department",
+    "creatorEmailLabel": "Creator email",
+    "creatorEmailPlaceholder": "creator@company.com",
+    "creatorPasswordLabel": "Temporary password",
+    "creatorPasswordPlaceholder": "At least 8 characters",
+    "createCreatorNote": "A new tenant is created together with this Creator account. Share the email and password with the Creator so they can log in and change it.",
+    "noticeCreatorCreated": "Tenant and creator account created.",
+    "errorCreateCreator": "Couldn't create the tenant/creator."
   },
   "common": {
     "appName": "MISA Flipbook",

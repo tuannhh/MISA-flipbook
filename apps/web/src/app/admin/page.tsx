@@ -57,6 +57,14 @@ export default function AdminPage() {
   const [createTitle, setCreateTitle] = useState("");
   const [createTenantId, setCreateTenantId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  // Khoi phuc luong tao Creator/don vi (bi go khoi UI trong dot F13-simplification,
+  // API /admin/tenants /admin/users /admin/memberships van con nguyen - xem
+  // admin.controller.ts). Gop tao tenant + user + membership vao 1 form cho don gian.
+  const [creatorOpen, setCreatorOpen] = useState(false);
+  const [creatorTenantName, setCreatorTenantName] = useState("");
+  const [creatorEmail, setCreatorEmail] = useState("");
+  const [creatorPassword, setCreatorPassword] = useState("");
+  const [creatingCreator, setCreatingCreator] = useState(false);
   const requestVersion = useRef(0);
 
   const load = useCallback(async () => {
@@ -158,6 +166,42 @@ export default function AdminPage() {
       toast("error", err instanceof ApiError ? err.message : t("errorCreateBook"));
     } finally {
       setCreating(false);
+    }
+  }
+
+  function openCreateCreator(): void {
+    setCreatorTenantName("");
+    setCreatorEmail("");
+    setCreatorPassword("");
+    setCreatorOpen(true);
+  }
+
+  async function submitCreateCreator(): Promise<void> {
+    if (!token || !creatorTenantName.trim() || !creatorEmail.trim() || creatorPassword.length < 8) return;
+    setCreatingCreator(true);
+    try {
+      const tenant = await apiFetch<AdminTenant>("/admin/tenants", {
+        method: "POST",
+        token,
+        body: { name: creatorTenantName.trim() },
+      });
+      const user = await apiFetch<{ id: string }>("/admin/users", {
+        method: "POST",
+        token,
+        body: { email: creatorEmail.trim().toLowerCase(), password: creatorPassword },
+      });
+      await apiFetch("/admin/memberships", {
+        method: "POST",
+        token,
+        body: { tenantId: tenant.id, userId: user.id },
+      });
+      toast("success", t("noticeCreatorCreated"));
+      setCreatorOpen(false);
+      await load();
+    } catch (err) {
+      toast("error", err instanceof ApiError ? err.message : t("errorCreateCreator"));
+    } finally {
+      setCreatingCreator(false);
     }
   }
 
@@ -338,6 +382,50 @@ export default function AdminPage() {
     </XDialog>
   );
 
+  const creatorDialog = (
+    <XDialog
+      open={creatorOpen}
+      onOpenChange={setCreatorOpen}
+      title={t("createCreatorDialogTitle")}
+      width={440}
+      footer={
+        <>
+          <XButton variant="neutral" onClick={() => setCreatorOpen(false)}>{tc("cancel")}</XButton>
+          <XButton
+            variant="primary"
+            loading={creatingCreator}
+            disabled={!creatorTenantName.trim() || !creatorEmail.trim() || creatorPassword.length < 8}
+            onClick={() => void submitCreateCreator()}
+          >
+            {creatingCreator ? t("creating") : tc("create")}
+          </XButton>
+        </>
+      }
+    >
+      <form
+        className="flex flex-col gap-4"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void submitCreateCreator();
+        }}
+      >
+        <div>
+          <label className="mb-1 block text-[13px] font-medium text-[var(--xds-text-secondary)]">{t("tenantNameLabel")}</label>
+          <XInput value={creatorTenantName} onChange={(event) => setCreatorTenantName(event.target.value)} placeholder={t("tenantNamePlaceholder")} autoFocus />
+        </div>
+        <div>
+          <label className="mb-1 block text-[13px] font-medium text-[var(--xds-text-secondary)]">{t("creatorEmailLabel")}</label>
+          <XInput type="email" value={creatorEmail} onChange={(event) => setCreatorEmail(event.target.value)} placeholder={t("creatorEmailPlaceholder")} />
+        </div>
+        <div>
+          <label className="mb-1 block text-[13px] font-medium text-[var(--xds-text-secondary)]">{t("creatorPasswordLabel")}</label>
+          <XInput type="password" value={creatorPassword} onChange={(event) => setCreatorPassword(event.target.value)} placeholder={t("creatorPasswordPlaceholder")} />
+        </div>
+        <p className="text-[12px] leading-4 text-[var(--xds-text-secondary)]">{t("createCreatorNote")}</p>
+      </form>
+    </XDialog>
+  );
+
   const deleteDialog = (
     <XDialog
       open={deleteTarget !== null}
@@ -351,9 +439,24 @@ export default function AdminPage() {
     </XDialog>
   );
 
+  const creatorCard = (
+    <div className="rounded-lg bg-[var(--xds-bg)] p-4 shadow-[var(--xds-shadow-card)]">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-[16px] font-semibold leading-[22px] text-[var(--xds-text)]">{t("creatorSectionTitle")}</h2>
+          <p className="mt-1 text-[12px] leading-4 text-[var(--xds-text-secondary)]">{t("creatorSectionDesc")}</p>
+        </div>
+        <XButton variant="neutral" icon={<XIcon name="plus" />} onClick={openCreateCreator}>
+          {t("createCreator")}
+        </XButton>
+      </div>
+    </div>
+  );
+
   const sections = (
     <div className="flex flex-col gap-4">
       {statsCard}
+      {creatorCard}
       {booksCard}
     </div>
   );
@@ -392,6 +495,7 @@ export default function AdminPage() {
       </div>
 
       {createDialog}
+      {creatorDialog}
       {deleteDialog}
     </>
   );
