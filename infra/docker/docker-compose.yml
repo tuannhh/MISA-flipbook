@@ -167,7 +167,12 @@ services:
       PDF_MAX_OUTPUT_BYTES: ${PDF_MAX_OUTPUT_BYTES:-536870912}
       PDF_MEDIA_MAX_BYTES: ${PDF_MEDIA_MAX_BYTES:-20971520}
       PDF_MEDIA_TOTAL_BYTES: ${PDF_MEDIA_TOTAL_BYTES:-52428800}
-      PDF_PROCESS_MEMORY_MB: ${PDF_PROCESS_MEMORY_MB:-512}
+      # 512 MB mac dinh qua chat cho PDF ky yeu/scan nhieu anh - PDF 190 MB that da
+      # bao loi MemoryError (resource_limit) khi render. Nang len 1536 MB, dong thoi
+      # nang tran container xuong 2G de con du dem cho tien trinh FastAPI cha (xem
+      # deploy.resources.limits ben duoi) - PDF_MAX_PROCESSES=1 nen chi 1 tien trinh
+      # con dung gioi han nay cung luc.
+      PDF_PROCESS_MEMORY_MB: ${PDF_PROCESS_MEMORY_MB:-1536}
       PDF_MAX_PROCESSES: ${PDF_MAX_PROCESSES:-1}
       PDF_TIMEOUT_SECONDS: ${PDF_TIMEOUT_SECONDS:-600}
       SHARE_THUMBNAIL_MAX_PIXELS: ${SHARE_THUMBNAIL_MAX_PIXELS:-32000000}
@@ -186,7 +191,7 @@ services:
       resources:
         limits:
           cpus: "1"
-          memory: 1G
+          memory: 2G
           pids: 64
 
   # dispatcher: CHI claim job tu Postgres outbox roi day vao BullMQ/Redis - khong
