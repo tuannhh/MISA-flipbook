@@ -320,3 +320,18 @@ integration hiện có** trên stack hợp nhất này (không chỉ tin số li
 riêng của họ): 197/197 assertion PASS, không phải sửa gì thêm. Chi tiết bảng kết quả và các gap còn
 mở (JWT đăng nhập trong URL ảnh/PDF, fail-open Redis, trần storage tổng, backup/restore drill) ở
 mục tương ứng trong `MEMORYBANK.md`. Không gắn stable tag; chưa hỏi người dùng về phạm vi Đợt 3.
+
+## Claude — đóng gate vận hành Đợt 4: cold-start + backup/restore drill (23/09/2026)
+
+Đối chiếu REMEDIATION.md mục 11 để làm tiếp việc còn mở. Xác nhận UI-01 (reader token đã scoped, không
+phải login JWT) và OPS-01 (bỏ `cygpath`) đã đóng bởi codex. Chạy hai gate codex tự ghi là CHƯA thực
+thi, trên project Compose CÔ LẬP `misa-flipbook-drill` (không đụng stack dev):
+- **Cold-start từ volume rỗng**: migrate áp đủ 21 migration (0001→0021) từ DB rỗng, toàn bộ service
+  healthy, proxy `/` + `/health` = 200.
+- **Backup/restore drill chức năng**: seed sách thật (5 trang, published) → `backup.sh --quiesce` →
+  wipe DB + storage → `restore.sh` → nghiệm thu SHA-256 ảnh trang đầu KHỚP byte-for-byte mốc trước
+  qua đúng đường reader-token (đúng quyền + file + chức năng, không chỉ đếm dòng).
+- **npm audit** 4 app Node: 0 vulnerabilities trên cây hợp nhất.
+
+Vẫn còn mở (ngoài tầm máy dev): CI xanh thật trên GitHub Actions (máy không có `gh`), soak dài hạn,
+device matrix thật, corpus PDF MISA, TLS/CDN/object-storage production. Không gắn stable tag.

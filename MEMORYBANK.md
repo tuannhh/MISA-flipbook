@@ -1845,3 +1845,51 @@ test dài hạn chưa chạy). Người dùng chưa quyết định lượt ti�
 
 Không có thay đổi code nào trong lượt này (chỉ pull + rebuild + test), nên không có gì mới để commit
 ngoài phần ghi chép này vào MEMORYBANK.md/ROADMAP.md.
+
+## Claude — đóng các gate vận hành Đợt 4: cold-start + backup/restore drill thật (23/09/2026)
+
+Sau khi hợp nhất, đối chiếu lại REMEDIATION.md (mục 11) và CODEX-RESPONSE section 4 mục 4 để tìm
+việc THẬT SỰ còn mở mà kiểm chứng được trên máy này, tránh làm lại việc codex đã xong. Kết quả rà
+soát: reader token đã là credential scoped theo book/revision (không phải login JWT — UI-01 follow-up
+ĐÃ đóng, xem `PublicBookReader.tsx:62-64,91-92,155-160`); OPS-01 đã bỏ phụ thuộc `cygpath`
+(`backup.sh`/`restore.sh` nay thuần docker-native). Hai gate vận hành codex tự ghi là CHƯA chạy là
+cold-start từ volume rỗng và backup/restore drill thực thi — tôi đã chạy cả hai.
+
+**Nguyên tắc an toàn:** dùng project Compose CÔ LẬP `misa-flipbook-drill` với override port
+(proxy→18080, postgres/redis không publish host port qua YAML tag `!reset []`/`!override`) và volume
+riêng, KHÔNG bao giờ `compose down -v` trên stack dev người dùng (đúng REMEDIATION mục 11). File
+override để trong scratchpad, không commit.
+
+**Cold-start từ volume rỗng (REMEDIATION 11 "Linux cold start từ volume rỗng"):** project drill có
+volume hoàn toàn mới → migrate chạy từ DB rỗng áp đủ **21 migration (0001→0021)**, log "Da ap dung 21
+migration moi", toàn bộ service lên healthy, `GET /` và `/health` qua proxy đều 200. Chứng minh stack
+dựng lại được từ số 0, không phụ thuộc trạng thái volume cũ.
+
+**Backup/restore drill CHỨC NĂNG (REMEDIATION 11 "test full restore đúng quyền, file, link và chức
+năng chứ không chỉ row count"):**
+1. Seed dữ liệu thật qua API: tenant + creator + book, upload `sample_vi_text.pdf`, job convert xong,
+   publish. Reader phục vụ ảnh trang đầu 200/46422 bytes; chụp mốc SHA-256 ảnh = `fd41d276...`;
+   DB: books=1, revs=1, assets=12.
+2. `backup.sh --quiesce`: quiesce writers, `pg_dump -Fc`, tar storage volume, sinh SHA256SUMS +
+   manifest. Ra đủ `db.dump`/`storage.tar.gz`/`SHA256SUMS`/`manifest.txt`, writers khởi động lại.
+3. Mô phỏng thảm họa: wipe sạch storage volume + DELETE toàn bộ assets/jobs/revisions/books/
+   memberships/tenants. Xác nhận đã chết: books=0, assets=0, reader không phục vụ được.
+4. `restore.sh --confirm-restore`: verify SHA256SUMS, `pg_restore --clean --if-exists`, thay nội dung
+   storage volume.
+5. **Nghiệm thu chức năng:** DB về lại books=1/revs=1/assets=12; reader phục vụ lại sách 5 trang đúng
+   tiêu đề; **SHA-256 ảnh trang đầu sau restore = `fd41d276...` KHỚP byte-for-byte mốc trước**, qua
+   đúng đường reader-token → asset (chứng minh cả quyền + file + chức năng, không chỉ đếm dòng).
+6. Dọn `compose down -v` CHỈ project drill; xác nhận stack dev người dùng còn nguyên healthy.
+
+**Bằng chứng bảo mật tươi trên cây đã hợp nhất:** `npm audit --omit=dev` cho api/web/worker-convert/
+dispatcher đều **0 vulnerabilities**. `pip-audit` cho pdf-worker chưa cài trên máy này nên chưa tự
+kiểm lại (codex trước đó báo 0 advisory) — ghi rõ là giới hạn, không nhận vơ.
+
+**Rà tĩnh CI (`.github/workflows/ci.yml`):** workflow có cold-start (`up -d --build --wait`), seed
+admin bằng `npx ts-node` (ts-node 10.9.2 + typescript 5.9.3 có trong apps/api devDeps), và đủ step
+cho 14 suite. Không thấy lỗi tĩnh chặn chạy. **Không tuyên bố CI đã xanh trên GitHub Actions** vì
+máy này không có `gh`/token để xác minh — đây vẫn là gate mở thật, cần chạy Actions thật hoặc act.
+
+**Còn mở thật sự (ngoài tầm máy dev này):** soak/SIGKILL hàng loạt dài hạn, CI xanh thật trên Actions,
+device matrix thiết bị thật, corpus PDF MISA thật (video/đa codec), TLS/CDN/object-storage production.
+Đây là các gate cần môi trường/thiết bị/hạ tầng ngoài, không thể "bốc" số trên máy dev.
