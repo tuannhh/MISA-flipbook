@@ -341,3 +341,18 @@ Khuyến nghị đợt vận hành: thêm liveness healthcheck cho worker-conver
 
 Vẫn còn mở (ngoài tầm máy dev): CI xanh thật trên GitHub Actions (máy không có `gh`), soak dài hạn,
 device matrix thật, corpus PDF MISA, TLS/CDN/object-storage production. Không gắn stable tag.
+
+## Claude — hoàn tất 3 việc còn mở theo yêu cầu người dùng (23/09/2026)
+
+1. **Liveness healthcheck** cho worker-convert + dispatcher (heartbeat file + `healthcheck.js`, compose
+   healthcheck). Kiểm chứng thật bằng SIGSTOP/SIGCONT (treo → unhealthy → hồi phục). Regression
+   pipeline_jobs 12/12 + p2 22/22. Commit `ae6de98`.
+2. **CI xanh THẬT trên GitHub Actions** — đọc runs qua REST API public: các commit d2dda3c/e93b8e2/
+   dadfdc3/dfbc016/**ae6de98** đều `success`, tất cả step (cold-start compose + 14 suite) xanh trên
+   `ubuntu-latest`. Đóng QA-01 residual. (Đã cài `act` nhưng bằng chứng Actions thật tốt hơn.)
+3. **Corpus MISA thật** — PDF 190MB/140 trang: convert 47s, publish, reader phục vụ ảnh thật; UI
+   desktop (spread) + mobile (1 trang) render đúng, không lỗi console. Sách tại
+   `http://127.0.0.1:8080/read/ky-yeu-70-nam-cuc-qlgskt-u0jrhvvy` (dev).
+
+Còn mở: soak dài hạn, device matrix vật lý, PDF video/đa codec, TLS/CDN/object-storage production.
+Không gắn stable tag.

@@ -1921,3 +1921,62 @@ KHÔNG có healthcheck (là consumer queue, không có HTTP port). Nên thêm li
 (worker chạm file định kỳ, healthcheck kiểm tra độ mới) để orchestrator production restart được khi
 worker treo (không exit) — phòng thủ chiều sâu, bổ sung cho restart-on-exit. Không tự thêm trong lượt
 này vì compose config đã đúng và gap là ở môi trường Docker Desktop.
+
+## Claude — làm 3 việc theo yêu cầu người dùng: liveness + CI thật + corpus MISA thật (23/09/2026)
+
+Người dùng yêu cầu làm cả 3 mục còn mở tôi đã đề xuất, và cung cấp PDF thật:
+`C:\Kỷ yếu Cục QLGSKT Bộ tài chính\Thiết kế\Sách kỷ yếu 70 năm thành lập Cục QLGSKTKT.pdf`.
+
+### (1) Liveness healthcheck cho worker-convert + dispatcher (đã code + kiểm chứng thật)
+
+Vá gap từ crash-recovery drill: hai consumer queue không có HTTP port nên trước đây không có
+healthcheck → orchestrator không phát hiện được process treo (không exit). Thêm:
+`apps/worker-convert/src/healthcheck.js` + `apps/dispatcher/src/healthcheck.js` (nhẹ, chỉ `fs`, kiểm
+tra độ mới heartbeat file, env `HEARTBEAT_FILE`/`HEARTBEAT_STALE_MS`). worker ghi heartbeat qua
+`setInterval` (`HEARTBEAT_INTERVAL_MS` mặc định 10s); dispatcher ghi cuối mỗi vòng loop KỂ CẢ khi
+DB/redis lỗi (để tránh unhealthy giả khi backing store chập chờn — restart không cứu được). Compose:
+healthcheck `node src/healthcheck.js`, interval 15s, retries 3, start_period 40s. Commit `ae6de98`.
+
+**Kiểm chứng thật (SIGSTOP/SIGCONT):** sống → healthcheck exit 0 (age ~1.5s); `kill -STOP 1` đóng băng
+event loop → heartbeat stale → healthcheck exit 1 = unhealthy; `kill -CONT 1` → exit 0, health=healthy.
+Unit test 3 nhánh (fresh/stale/missing) đúng. Regression sau rebuild: pipeline_jobs 12/12, p2 e2e 22/22.
+Lưu ý: trên Docker Desktop máy này restart policy vẫn không fire (đã ghi ở drill trước); healthcheck
+này phát huy trên K8s liveness / docker-autoheal thật.
+
+### (2) CI xanh THẬT trên GitHub Actions (không chỉ rà tĩnh)
+
+Cài `act` qua winget (0.2.89) nhưng chạy full CI compose-based qua act đồng thời với stack dev sẽ đụng
+host port + `down -v` rủi ro. Cách faithful + an toàn hơn: repo public `tuannhh/MISA-flipbook`, đọc
+được Actions runs qua REST API KHÔNG cần auth. Workflow trigger on push nên các commit tôi đẩy đã chạy
+thật trên `ubuntu-latest`:
+
+| Commit | Kết luận CI |
+|---|---|
+| d2dda3c (codex cuối) | success |
+| e93b8e2 (hợp nhất) | success |
+| dadfdc3 (cold-start+backup docs) | success |
+| dfbc016 (crash-recovery docs) | success |
+| **ae6de98 (liveness)** | **success** |
+
+Chi tiết step-level (lấy từ API): TẤT CẢ xanh — cold-start `docker compose up --wait`, seed admin,
+RLS, P1, cookie/CSRF/CORS, P2, PDF media F10, P3, F16, P5, security audit SEC-01/02/03, PDF supervisor,
+job lease/replay/recovery, storage accounting, upload concurrency, reverse-proxy/trust-proxy,
+rate-limit fallback (Redis down), teardown. "Dump logs on failure" = skipped (không có failure). ⇒
+**QA-01 residual (codex lặp "chưa chứng minh Actions chạy xanh") ĐÃ ĐÓNG bằng bằng chứng thật.** Cách
+kiểm nhanh cho lần sau: xem [[reference-ci-github-actions]].
+
+### (3) Reader/UX với corpus MISA thật (pipeline + API + UI desktop + mobile)
+
+File thật **190.3 MB / 140 trang** (sát trần 200 MiB, dưới trần 500 trang). Upload qua API dev
+(`8080`) → stream nhận ~4s → convert **xong 47s** (progress 100, 1 attempt, KHÔNG lỗi, KHÔNG chạm
+budget) → publish + cover tự set. Reader API phục vụ trang đầu/giữa/cuối: đều 200 `image/webp`, SHA
+khác nhau (ảnh render thật, không placeholder). Kiểm chứng UI trong trình duyệt:
+- Desktop: bìa render đúng (Bộ Tài chính, Cục QLGSKT, "70 NĂM 1956-2026 HÌNH THÀNH & PHÁT TRIỂN"),
+  đếm "Trang 1/140", lật sang "Trang 2-3/140" (spread 2 trang) OK, KHÔNG lỗi console.
+- Mobile 375×812: chế độ 1 trang (đúng default mobile), nút toolbar cỡ chạm lớn, bìa nét.
+⇒ Pipeline + reader chịu được sách MISA thật end-to-end. Sách để lại trên stack dev để người dùng
+xem: `http://127.0.0.1:8080/read/ky-yeu-70-nam-cuc-qlgskt-u0jrhvvy` (dữ liệu test, xóa được bất cứ lúc nào).
+
+**Giới hạn còn lại (thật, ngoài tầm máy dev):** soak dài hạn nhiều giờ, device matrix thiết bị vật lý
+thật, PDF có video/đa codec, TLS/CDN/object-storage/HA production. `pip-audit` pdf-worker chưa cài lại.
+Không gắn stable tag khi chưa có xác nhận người dùng theo HANDOFF.md.
