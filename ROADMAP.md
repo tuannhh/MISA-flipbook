@@ -333,5 +333,11 @@ thi, trên project Compose CÔ LẬP `misa-flipbook-drill` (không đụng stack
   qua đúng đường reader-token (đúng quyền + file + chức năng, không chỉ đếm dòng).
 - **npm audit** 4 app Node: 0 vulnerabilities trên cây hợp nhất.
 
+**Crash-recovery drill process-kill thật:** upload → `docker kill` worker-convert giữa job → reconciler
+bump generation, re-dispatch, và khi worker sống lại job hoàn tất `done` (~9s). Lease/fencing chịu được
+kill thật. Phát hiện caveat vận hành: trên Docker Desktop máy này, `restart: unless-stopped` KHÔNG tự
+restart (cả container alpine trần cũng vậy) — là hành vi môi trường, không phải lỗi config/pipeline.
+Khuyến nghị đợt vận hành: thêm liveness healthcheck cho worker-convert/dispatcher.
+
 Vẫn còn mở (ngoài tầm máy dev): CI xanh thật trên GitHub Actions (máy không có `gh`), soak dài hạn,
 device matrix thật, corpus PDF MISA, TLS/CDN/object-storage production. Không gắn stable tag.

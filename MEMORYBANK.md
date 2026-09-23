@@ -1893,3 +1893,31 @@ máy này không có `gh`/token để xác minh — đây vẫn là gate mở th
 **Còn mở thật sự (ngoài tầm máy dev này):** soak/SIGKILL hàng loạt dài hạn, CI xanh thật trên Actions,
 device matrix thiết bị thật, corpus PDF MISA thật (video/đa codec), TLS/CDN/object-storage production.
 Đây là các gate cần môi trường/thiết bị/hạ tầng ngoài, không thể "bốc" số trên máy dev.
+
+### Crash-recovery drill process-kill thật (23/09/2026)
+
+Codex ghi "Chưa thử SIGKILL... trong bài soak dài" — unit test lease (`pipeline_jobs.test.js`) chỉ gọi
+hàm trực tiếp, chưa từng kill process thật. Đã chạy drill trên stack dev: upload PDF nhiều trang →
+job vào `processing` → `docker kill --signal=KILL misa-flipbook-worker-convert-1` giữa chừng → quan
+sát phục hồi.
+
+**Kết quả 1 — cơ chế phục hồi job ĐÚNG (không phải bug):** reconciler của dispatcher phát hiện lease
+hết hạn, bump `dispatch_generation` 1→3 (re-dispatch nhiều lần), clear `lease_token`, ghi
+`error='Execution lease expired'`. Job phục hồi được, chỉ cần một worker sống để claim. Khi
+worker-convert chạy lại, job (generation 3) được claim và hoàn tất `done` trong ~9s (attempts 1→2),
+reader phục vụ đủ trang. Lease/fencing/reconciler chịu được process-kill thật, không chỉ unit test.
+
+**Kết quả 2 — caveat vận hành THẬT (không phải bug code/config dự án):** sau `docker kill`,
+worker-convert KHÔNG tự restart dù compose khai báo `restart: unless-stopped` (inspect xác nhận
+`HostConfig.RestartPolicy.Name=unless-stopped`, nhưng `RestartCount=0`, đứng `Exited(137)`). Cô lập
+nguyên nhân bằng một container `alpine` trần với `--restart unless-stopped`: kill xong cũng KHÔNG
+restart (count=0). ⇒ Đây là **hành vi Docker Desktop trên máy này** (`docker kill` không kích hoạt
+restart manager), KHÔNG phải lỗi cấu hình dự án (khai báo đúng) và KHÔNG phải lỗi pipeline. Trên
+Docker Linux thật / K8s, restart policy (hoặc Deployment/liveness) sẽ khởi động lại worker crash, và
+— như Kết quả 1 đã chứng minh — job sẽ tự phục hồi sau đó.
+
+**Khuyến nghị cho đợt vận hành (chưa làm, ngoài phạm vi sửa lỗi):** worker-convert và dispatcher hiện
+KHÔNG có healthcheck (là consumer queue, không có HTTP port). Nên thêm liveness dạng heartbeat-file
+(worker chạm file định kỳ, healthcheck kiểm tra độ mới) để orchestrator production restart được khi
+worker treo (không exit) — phòng thủ chiều sâu, bổ sung cho restart-on-exit. Không tự thêm trong lượt
+này vì compose config đã đúng và gap là ở môi trường Docker Desktop.
