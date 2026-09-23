@@ -310,3 +310,13 @@ P3 (35), F16 (12), security (14), media (16), cùng production builds. Đây là
 MISA dựng Docker pilot/staging; không phải stable. Yêu cầu trước production: TLS với
 `AUTH_COOKIE_SECURE=true`, topology proxy đúng, secret manager, backup restore drill, device matrix
 và corpus PDF MISA. Xem `handoffs/HF-20260921-06.md`.
+
+## Claude — hợp nhất Đợt 1 + Đợt 2 trên một stack dev, kiểm chứng độc lập (23/09/2026)
+
+Trước đây Đợt 1 (Claude) và Đợt 2 (codex) mỗi bên tự kiểm trên stack Docker cô lập của riêng mình.
+Đã fast-forward `main` (`745e28c` → `d2dda3c`), rebuild toàn bộ stack dev thật đang dùng (topology
+mới có Nginx proxy `127.0.0.1:8080`), áp migration 0015–0021, và chạy lại **toàn bộ 14 bộ test
+integration hiện có** trên stack hợp nhất này (không chỉ tin số liệu codex tự báo cáo trên stack
+riêng của họ): 197/197 assertion PASS, không phải sửa gì thêm. Chi tiết bảng kết quả và các gap còn
+mở (JWT đăng nhập trong URL ảnh/PDF, fail-open Redis, trần storage tổng, backup/restore drill) ở
+mục tương ứng trong `MEMORYBANK.md`. Không gắn stable tag; chưa hỏi người dùng về phạm vi Đợt 3.

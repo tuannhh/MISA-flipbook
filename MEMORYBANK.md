@@ -1789,3 +1789,59 @@ rút gọn F13. Commit `493835dff0b5500b01ebba1ddfa4ee8cf6218c86` thêm create f
 trang upload PDF. Nút có trên desktop/mobile; tenant suspended không được chọn. Production build pass;
 Docker proxy test 15/15 xác nhận Admin list tenant active + tạo book thật cùng các cookie/CSRF assertions.
 Handoff candidate hiện hành: `handoffs/HF-20260921-07.md`.
+
+## Claude — hợp nhất công việc Đợt 2 của codex vào stack dev + kiểm chứng độc lập (23/09/2026)
+
+Codex đã tiếp quản và tự làm Đợt 2 (PDF-01/02, JOB-01, EDGE-01, cookie session, proxy, media,
+storage accounting...) trên các stack Docker **cô lập riêng** (`misa-flipbook-codex-test`,
+`-cookie`, `-media`, `-proxy`...) và đẩy thẳng lên `main` (không qua PR chờ Claude review trước).
+Nhận yêu cầu người dùng "kéo bản mới nhất từ GitHub", đã `git fetch` + fast-forward `main` từ
+`745e28c` (baseline Đợt 1 của Claude) lên `d2dda3c`, không có phân kỳ.
+
+**Việc đã làm:** rebuild toàn bộ image (`api`, `web`, `pdf-worker`, `dispatcher`, `worker-convert`,
+`proxy` mới bằng Nginx), áp dụng 7 migration mới (0015–0021) trên **stack dev đang dùng thật**
+(không phải stack cô lập của codex), đưa lên qua topology mới (Nginx proxy `127.0.0.1:8080`,
+API/web không còn mở port ra host). Đây là lần đầu tiên toàn bộ công việc Đợt 1 (Claude) + Đợt 2
+(codex) chạy CHUNG một stack, thay vì mỗi bên tự kiểm trên môi trường riêng của mình.
+
+**Kiểm chứng thực tế, không tin số liệu do codex tự báo cáo trên stack cô lập của họ:** chạy lại
+toàn bộ 14 bộ test integration hiện có trên stack hợp nhất này, theo đúng quy trình `.github/workflows/ci.yml`
+(kể cả các bước cần thao tác container đặc biệt: `docker compose stop dispatcher` + copy source
+dispatcher vào `worker-convert` để chạy `pipeline_jobs.test.js`; `docker compose cp` code test vào
+`worker-convert`/`api` cho `storage_reconciliation.test.js`/`pipeline_upload.test.js`; `docker compose
+stop redis` cho `rate_limit_fallback.test.js`). Kết quả tất cả PASS, không phải sửa gì thêm ở đợt này:
+
+| Bộ test | Kết quả |
+|---|---:|
+| tenant_isolation (RLS) | 13/13 |
+| api_e2e (P1) | 14/14 |
+| p2_e2e (P2) | 22/22 |
+| p3_e2e (P3) | 35/35 |
+| f16_visibility | 12/12 |
+| p5_uat (P5) | 21/21 |
+| sec_audit_20260921 (SEC-01/02/03 Đợt 1) | 14/14 |
+| cookie_session_security | 15/15 |
+| pdf_media_e2e | 16/16 |
+| proxy_security | 5/5 |
+| pipeline_jobs (lease/fencing) | 12/12 |
+| storage_reconciliation | 9/9 |
+| pipeline_upload | 6/6 |
+| rate_limit_fallback (Redis down) | 3/3 |
+| **Tổng** | **197/197** |
+
+Ghi chú SEC-01: assertion "sách công khai thường" đổi nội dung so với bản Claude viết ở Đợt 1 —
+codex đã đổi cách cache public sang có bước tải lại xác thực khi chuyển Public→Private, đúng gap mà
+họ tự flag trong `docs/audits/20260921-codex-followup.md` (mục SEC-01 "còn phải nghiệm thu"). Chưa
+đọc lại toàn bộ diff của assertion này để xác nhận cơ chế chính xác — nếu cần audit sâu hơn cơ chế
+revalidation thì phải đọc lại `public-books.controller.ts` hiện hành, việc này chưa làm trong lượt này.
+
+**Không coi 197/197 là "mọi thứ đã xong"**: đây là xác nhận không có regression khi hợp nhất hai
+nhánh công việc, không phải nghiệm thu các gap mà chính codex đã liệt kê là còn mở trong
+`docs/audits/20260921-codex-followup.md` mục "Tiếp tục theo thứ tự" (JWT đăng nhập trong URL ảnh/PDF
+ở UI-01 vẫn CHƯA sửa; fail-open Redis khi rate-limit lỗi vẫn còn giới hạn; storage accounting mới có
+phần "nóng", chưa có trần tổng dung lượng xuyên mọi revision/attempt; backup/restore drill và soak
+test dài hạn chưa chạy). Người dùng chưa quyết định lượt tiếp theo là tự làm các gap này hay tiếp tục
+để codex làm — sẽ hỏi khi tới lúc cần quyết định phạm vi.
+
+Không có thay đổi code nào trong lượt này (chỉ pull + rebuild + test), nên không có gì mới để commit
+ngoài phần ghi chép này vào MEMORYBANK.md/ROADMAP.md.
