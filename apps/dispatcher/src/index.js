@@ -4,11 +4,14 @@ for (const name of ["DATABASE_URL","REDIS_URL"]) {
 }
 // Durable DB outbox. Redis messages are disposable; generation IDs avoid dedupe
 // against terminal/stalled BullMQ messages from an older delivery.
+const fs = require("fs");
 const { Pool } = require("pg");
 const { Queue } = require("bullmq");
 const IORedis = require("ioredis");
 const pool = new Pool({connectionString:process.env.DATABASE_URL,max:5});
 const MAX_ATTEMPTS = Number(process.env.JOB_ATTEMPTS ?? 3);
+const HEARTBEAT_FILE = process.env.HEARTBEAT_FILE || "/tmp/dispatcher.heartbeat";
+function beat() { try { fs.writeFileSync(HEARTBEAT_FILE, String(Date.now())); } catch {} }
 async function tx(fn) {
   const c = await pool.connect();
   try {
@@ -53,6 +56,7 @@ async function main() {
   let lastReconcile = 0;
   const shutdown = () => { stopped = true; };
   process.on("SIGTERM",shutdown); process.on("SIGINT",shutdown);
+  beat();
   while (!stopped) {
     try {
       if (Date.now()-lastReconcile >= Number(process.env.RECONCILE_INTERVAL_MS ?? 10000)) {
@@ -60,6 +64,7 @@ async function main() {
       }
       await pollAndClaim(queue);
     } catch (err) { console.error(`Dispatcher: ${err.message}`); }
+    beat();
     await new Promise(r=>setTimeout(r,Number(process.env.POLL_INTERVAL_MS ?? 2000)));
   }
   await queue.close(); connection.disconnect(); await pool.end();

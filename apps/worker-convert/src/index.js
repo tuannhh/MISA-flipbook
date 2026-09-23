@@ -5,6 +5,7 @@ for (const name of ["DATABASE_URL","REDIS_URL","STORAGE_ROOT","PDF_WORKER_URL","
 const { randomUUID } = require("crypto");
 const path = require("path");
 const fs = require("fs/promises");
+const fsSync = require("fs");
 const { Pool } = require("pg");
 const { Worker } = require("bullmq");
 const IORedis = require("ioredis");
@@ -15,6 +16,9 @@ const MAX_ATTEMPTS = Number(process.env.JOB_ATTEMPTS ?? 3);
 const HTTP_TIMEOUT_MS = (Number(process.env.PDF_TIMEOUT_SECONDS ?? 600) + 30) * 1000;
 const TENANT_STORAGE_BYTES = Number(process.env.TENANT_STORAGE_BYTES ?? 50 * 1024 * 1024 * 1024);
 const STORAGE_RECONCILE_INTERVAL_MS = Number(process.env.STORAGE_RECONCILE_INTERVAL_MS ?? 6 * 60 * 60 * 1000);
+const HEARTBEAT_FILE = process.env.HEARTBEAT_FILE || "/tmp/worker-convert.heartbeat";
+const HEARTBEAT_INTERVAL_MS = Number(process.env.HEARTBEAT_INTERVAL_MS ?? 10000);
+function beat() { try { fsSync.writeFileSync(HEARTBEAT_FILE, String(Date.now())); } catch {} }
 const { reconcileStorage, pool: storageReconcilerPool } = require("./storage-reconciler");
 if (!(LEASE_SECONDS >= 15 && MAX_ATTEMPTS >= 1 && Number.isSafeInteger(TENANT_STORAGE_BYTES) && TENANT_STORAGE_BYTES > 0)) {
   throw new Error("Invalid worker limits");
@@ -219,8 +223,11 @@ async function main() {
   const maintenanceEnabled = Number.isSafeInteger(STORAGE_RECONCILE_INTERVAL_MS) && STORAGE_RECONCILE_INTERVAL_MS >= 60_000;
   if (maintenanceEnabled) void runReconciler();
   const maintenanceTimer = maintenanceEnabled ? setInterval(() => void runReconciler(), STORAGE_RECONCILE_INTERVAL_MS) : null;
+  beat();
+  const heartbeatTimer = setInterval(beat, HEARTBEAT_INTERVAL_MS);
   const shutdown = async () => {
     if (maintenanceTimer) clearInterval(maintenanceTimer);
+    clearInterval(heartbeatTimer);
     await worker.close(); connection.disconnect(); await Promise.all([pool.end(), storageReconcilerPool.end()]); process.exit(0);
   };
   process.on("SIGTERM", shutdown);
