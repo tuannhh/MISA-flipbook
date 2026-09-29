@@ -16,11 +16,17 @@ ENV NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL}
 # de rong = fallback link sharer.php (van hoat dong, khong can app). Xem lib/facebookShare.ts.
 ARG NEXT_PUBLIC_FACEBOOK_APP_ID=
 ENV NEXT_PUBLIC_FACEBOOK_APP_ID=${NEXT_PUBLIC_FACEBOOK_APP_ID}
+# Domain cong khai (link chia se / ma nhung). De trong = dung origin hien tai.
+ARG NEXT_PUBLIC_PUBLIC_BASE_URL=
+ENV NEXT_PUBLIC_PUBLIC_BASE_URL=${NEXT_PUBLIC_PUBLIC_BASE_URL}
 RUN npm run build
 
 FROM node:22-slim
 RUN groupadd --system app && useradd --system --gid app --home-dir /app app
 WORKDIR /app
+# Runtime chay bang `node`, khong can npm: go npm (kem theo image node) de loai bo cac goi bundled
+# co CVE (tar, brace-expansion, picomatch...) khoi image cuoi. Dependency cua app da duoc Trivy/npm audit xac nhan sach.
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
 COPY --from=build /app/.next/standalone ./
 COPY --from=build /app/.next/static ./.next/static
 COPY --from=build /app/public ./public

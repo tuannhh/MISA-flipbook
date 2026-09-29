@@ -143,7 +143,22 @@ async function main() {
       const job = await waitJobTerminal(tokenA, tenantAId, up.data.jobId);
       check("job PDF corrupt ket thuc 'failed' co kiem soat (khong treo qua 30s)", job?.state === "failed", job);
     } else {
-      check("upload PDF corrupt van tra jobId de theo doi", false, up);
+      // Hop dong moi (siet upload): PDF thieu %%EOF bi tu choi NGAY luc upload (400), khong nhan vao kho.
+      check("PDF corrupt (thieu %%EOF) bi tu choi som luc upload (400), khong tao job", up.status === 400, up);
+    }
+    {
+      // Than hong nhung du chu ky + %%EOF -> qua cua upload, phai bi convert bao 'failed' co kiem soat.
+      const junk = Buffer.concat([Buffer.from("%PDF-1.4\n"), Buffer.from(Array.from({ length: 50000 }, (_, i) => (i * 131 + 7) % 251)), Buffer.from("\n%%EOF\n")]);
+      const junkPath = path.join(FIXTURE_DIR, "..", ".tmp-junk-body.pdf");
+      fs.writeFileSync(junkPath, junk);
+      try {
+        const bj = await api("POST", "/books", { token: tokenA, tenantId: tenantAId, json: { title: `Sach than hong ${suffix}` } });
+        const upj = await uploadPdf(tokenA, tenantAId, bj.data.id, junkPath);
+        const jobj = upj.data?.jobId ? await waitJobTerminal(tokenA, tenantAId, upj.data.jobId) : null;
+        check("PDF than hong nhung co %%EOF -> job 'failed' co kiem soat (khong treo)", upj.status === 201 && jobj?.state === "failed", [upj.status, jobj]);
+      } finally {
+        fs.rmSync(junkPath, { force: true });
+      }
     }
     // He thong (dispatcher/worker-convert) van song binh thuong sau 2 job loi lien tiep -
     // xac nhan bang cach upload tiep 1 file HOP LE va cho job 'done'.

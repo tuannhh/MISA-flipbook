@@ -1,0 +1,5 @@
+# Script/config chay trong container Linux phai giu LF (autocrlf tren Windows se lam hong shebang).
+*.sh text eol=lf
+infra/docker/public-edge/*.template text eol=lf
+infra/docker/public-edge/*.conf text eol=lf
+infra/docker/proxy/*.conf text eol=lf

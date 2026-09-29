@@ -31,11 +31,21 @@ export async function withPdfUpload(req: AuthedRequest, res: Response, handler: 
       });
     });
     if (!req.file) throw new BadRequestException("Thieu file PDF (field 'file').");
+    // Kiem tra cau truc, khong chi tin phan mo rong / Content-Type do client gui (khong dung
+    // req.file.originalname/mimetype de quyet dinh gi - ten file khong bao gio di vao duong dan luu).
+    //  1) chu ky %PDF-X.Y o dau file;  2) dau hieu ket thuc %%EOF nam trong 1 KiB cuoi
+    //     (chan file PDF bi noi them payload phia sau).
+    // PDF hop le nhung hong -> pdf-worker (chay sandbox, khong co mang) bao failed o buoc convert.
     const file = await fs.promises.open(req.file.path, "r");
     try {
-      const header = Buffer.alloc(5);
-      await file.read(header, 0, 5, 0);
-      if (!header.equals(Buffer.from("%PDF-"))) throw new BadRequestException("File khong dung dinh dang PDF (sai chu ky %PDF-).");
+      const stat = await file.stat();
+      const header = Buffer.alloc(16);
+      await file.read(header, 0, header.length, 0);
+      if (!/^%PDF-[12]\.\d/.test(header.toString("latin1"))) throw new BadRequestException("File khong dung dinh dang PDF (sai chu ky %PDF-).");
+      const tailSize = Math.min(1024, stat.size);
+      const tail = Buffer.alloc(tailSize);
+      await file.read(tail, 0, tailSize, stat.size - tailSize);
+      if (!tail.includes(Buffer.from("%%EOF"))) throw new BadRequestException("File PDF khong hop le (thieu dau ket thuc %%EOF).");
     } finally { await file.close(); }
     const hash = crypto.createHash("sha256");
     for await (const chunk of fs.createReadStream(req.file.path)) hash.update(chunk);

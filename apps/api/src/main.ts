@@ -2,6 +2,7 @@ import "reflect-metadata";
 import { NestFactory } from "@nestjs/core";
 import { ValidationPipe } from "@nestjs/common";
 import { AppModule } from "./app.module";
+import { buildAllowList, networkPlaneMiddleware } from "./common/network/network-plane";
 
 function corsOrigins(): string[] | boolean {
   const raw = process.env.CORS_ORIGIN;
@@ -43,6 +44,10 @@ async function bootstrap() {
     const expressApp = app.getHttpAdapter().getInstance() as { set(name: string, value: number): void };
     expressApp.set("trust proxy", proxyHops);
   }
+  // Yeu cau an ninh MISA: mat phang noi bo (moi thu tru /public va /health) chi cho IP MISA.
+  // Dat TRUOC moi route/guard de request tu ngoai khong cham toi auth hay DB.
+  const expressForGuard = app.getHttpAdapter().getInstance() as { use(handler: unknown): void };
+  expressForGuard.use(networkPlaneMiddleware(buildAllowList(process.env.MISA_ALLOWED_CIDRS)));
   app.useGlobalPipes(
     new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true })
   );

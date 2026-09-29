@@ -51,6 +51,9 @@ services:
     build:
       context: ../../apps/api
     restart: unless-stopped
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    networks: [default, sandbox]
     depends_on:
       postgres:
         condition: service_healthy
@@ -74,6 +77,8 @@ services:
       BOOK_PASSWORD_IP_MAX_ATTEMPTS: ${BOOK_PASSWORD_IP_MAX_ATTEMPTS:-32}
       BOOK_PASSWORD_LOCKOUT_MINUTES: ${BOOK_PASSWORD_LOCKOUT_MINUTES:-15}
       TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-1}
+      # Yeu cau an ninh MISA: mat phang noi bo chi cho IP MISA (fail-closed neu thieu).
+      MISA_ALLOWED_CIDRS: ${MISA_ALLOWED_CIDRS:?can dat MISA_ALLOWED_CIDRS trong .env (CIDR mang MISA, phan tach dau phay)}
       JWT_SECRET: ${JWT_SECRET:?can dat JWT_SECRET trong .env}
       JWT_EXPIRES_IN_SECONDS: ${JWT_EXPIRES_IN_SECONDS:-28800}
       # false is allowed only for local HTTP Docker pilot. Production HTTPS must set true.
@@ -113,6 +118,8 @@ services:
       args:
         NEXT_PUBLIC_API_BASE_URL: ${WEB_PUBLIC_API_BASE_URL:-/api}
         NEXT_PUBLIC_FACEBOOK_APP_ID: ${WEB_PUBLIC_FACEBOOK_APP_ID:-}
+        # Domain cong khai (vd https://flipbook.misa.vn): link chia se / ma nhung Dashboard sinh ra tro toi day.
+        NEXT_PUBLIC_PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
     environment:
       # F08: generateMetadata (Open Graph, server-side) chay code TRONG container web,
       # phai goi thang toi service "api" qua Docker network noi bo - khac han
@@ -120,6 +127,8 @@ services:
       # phia tren). Bien runtime thuong (khong NEXT_PUBLIC_), khong bi inline luc build.
       API_INTERNAL_BASE_URL: http://api:3000
     restart: unless-stopped
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
     depends_on:
       api:
         condition: service_healthy
@@ -138,13 +147,47 @@ services:
         condition: service_healthy
       web:
         condition: service_started
+    environment:
+      MISA_ALLOWED_CIDRS: ${MISA_ALLOWED_CIDRS:?can dat MISA_ALLOWED_CIDRS trong .env}
     ports:
-      - "127.0.0.1:8080:8080"
+      # Mat phang NOI BO (Dashboard/BE): dat INTERNAL_BIND = IP LAN MISA tren server, KHONG dat 0.0.0.0
+      # ra Internet. Nginx + API deu chi cho MISA_ALLOWED_CIDRS.
+      - "${INTERNAL_BIND:-127.0.0.1}:8080:8080"
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     healthcheck:
       # BusyBox resolves localhost to IPv6 first while this minimal config listens on IPv4.
       test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128M
+
+  # public-edge: domain CONG KHAI. Chi chuyen tiep duong doc sach da publish (allowlist duong dan
+  # + method); login/dashboard/admin/upload/API quan tri khong ton tai o day. Co the chay tren
+  # may DMZ rieng, chi can tro upstream ve BE (xem infra/docker/public-edge/).
+  public-edge:
+    build:
+      context: ./public-edge
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+      web:
+        condition: service_started
+    environment:
+      PUBLIC_EDGE_API_UPSTREAM: ${PUBLIC_EDGE_API_UPSTREAM:-http://api:3000}
+      PUBLIC_EDGE_WEB_UPSTREAM: ${PUBLIC_EDGE_WEB_UPSTREAM:-http://web:3001}
+    ports:
+      - "${PUBLIC_EDGE_BIND:-127.0.0.1}:8081:8081"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8081/health"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -177,6 +220,11 @@ services:
       PDF_TIMEOUT_SECONDS: ${PDF_TIMEOUT_SECONDS:-600}
       SHARE_THUMBNAIL_MAX_PIXELS: ${SHARE_THUMBNAIL_MAX_PIXELS:-32000000}
     init: true
+    # Sandbox: PDF la dau vao khong tin cay -> khong co internet (SSRF/exfiltration), fs chi doc.
+    networks: [sandbox]
+    read_only: true
+    tmpfs:
+      - /tmp:size=512m,mode=1777
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     volumes:
@@ -201,6 +249,8 @@ services:
     build:
       context: ../../apps/dispatcher
     restart: unless-stopped
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
     depends_on:
       postgres:
         condition: service_healthy
@@ -235,6 +285,9 @@ services:
     build:
       context: ../../apps/worker-convert
     restart: unless-stopped
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    networks: [default, sandbox]
     depends_on:
       postgres:
         condition: service_healthy
@@ -272,6 +325,11 @@ services:
         limits:
           cpus: "0.5"
           memory: 256M
+
+networks:
+  # Mang noi bo khong ra Internet, danh rieng cho pdf-worker (xu ly PDF khong tin cay).
+  sandbox:
+    internal: true
 
 volumes:
   pgdata:

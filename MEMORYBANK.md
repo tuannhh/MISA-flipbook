@@ -2019,3 +2019,33 @@ p5_uat 21/21, sec_audit 14/14, cookie_session 15/15 (`API_BASE_URL` không có `
 **Còn mở:** chưa có device matrix thiết bị thật (cảm ứng thật, iOS Safari); test corpus/flip
 chưa đưa vào CI (cần Chrome + python deps; dùng `tests/fixtures/pdf/sample_stress_150pages.pdf` làm `CORPUS_PDF`) — cần hỏi trước khi sửa CI.
 Chưa commit/push các thay đổi này (đang chờ người dùng).
+
+## Claude — yêu cầu an ninh thông tin MISA: tách mặt phẳng nội bộ / công khai + siết upload (29/09/2026)
+
+**Yêu cầu:** (1) BE chạy trên server MISA, chỉ IP MISA truy cập vì chưa được kiểm tra an ninh (rủi ro đẩy shell thay vì PDF);
+(2) có chức năng publish ra domain public để mọi người xem (kiểu CMS). Chi tiết vận hành: `docs/network-planes.md`.
+
+**Đã làm (chưa commit):**
+- `proxy` (nginx nội bộ, :8080): allowlist từ `MISA_ALLOWED_CIDRS` (`40-allowlist.sh`), fail-closed, whitelist ký tự chống chèn lệnh.
+- API guard `common/network/network-plane.ts`: mọi đường trừ `/public/**` và `/health` cần IP MISA; thiếu biến → API không khởi động.
+- Service mới `public-edge` (:8081, `infra/docker/public-edge`): allowlist đường dẫn + method; không login/dashboard/admin/upload/API quản trị; body ≤16KB; rate limit; có thể đặt máy DMZ.
+- Upload: thêm kiểm tra `%PDF-1.x/2.x` + `%%EOF` trong 1 KiB cuối; tên/Content-Type client không được tin. **Đổi hợp đồng:** PDF cắt cụt/thiếu `%%EOF` bị 400 ngay lúc upload (trước đây nhận rồi job `failed`); đã cập nhật `p5_uat` và `corpus_real_pdf`, thêm ca “thân hỏng + có %%EOF → job failed”.
+- Sandbox: `pdf-worker` ở mạng `internal` (không Internet), `read_only` + tmpfs; `cap_drop: ALL` + `no-new-privileges` cho cả api/web/dispatcher/worker-convert.
+- Web: `publicOrigin()` (`NEXT_PUBLIC_PUBLIC_BASE_URL`, build arg `PUBLIC_BASE_URL`) → link chia sẻ/mã nhúng trong Dashboard trỏ domain public thay vì địa chỉ nội bộ.
+
+**Kiểm chứng:** `network_planes.test.js` **58/58** (kèm `NETPLANE_RECONFIGURE=1`: tạo lại proxy+api với CIDR giả 203.0.113.0/24 → cổng nội bộ 403 cho cả /login, /dashboard, login API; domain public vẫn đọc được; sau đó khôi phục). Hồi quy: api_e2e 14, p2 22, p3 35, pdf_media 16, f16 12, p5_uat 22, sec_audit 14, tenant_isolation 13, cookie 15, corpus 56 — đều xanh.
+
+**Việc còn lại / cần quyết định:**
+- **CI (.github/workflows/ci.yml) tự viết `.env` riêng nên THIẾU `MISA_ALLOWED_CIDRS` → `docker compose up` sẽ lỗi.** Cần thêm 1 dòng `MISA_ALLOWED_CIDRS=127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16` vào bước “Write CI .env” (chưa sửa vì cần người dùng đồng ý sửa CI).
+- Production: điền dải IP MISA thật, bind `INTERNAL_BIND` vào IP LAN, đặt TLS/WAF trước :8081, đặt `PUBLIC_BASE_URL` khi build web.
+- “Publish” hiện là trạng thái trong DB, public-edge đọc trực tiếp từ BE qua allowlist. Nếu an ninh muốn tách cứng hơn (bản sao chỉ-đọc/object storage cho domain public, BE hoàn toàn không nhìn thấy từ Internet), cần thiết kế thêm bước xuất bản snapshot — chưa làm.
+- Xác thực đa yếu tố / kiểm thử xâm nhập độc lập cho BE vẫn cần bộ phận an ninh thực hiện.
+
+## Claude — rà soát gói giao diện + quét Trivy (29/09/2026)
+
+- **Danh sách API:** `docs/api-reference.md` (44 endpoint: 41 API NestJS + 3 nội bộ pdf-worker).
+- **Gói giao diện (`apps/web`):** `npm audit` = **0 lỗ hổng**; Trivy trên mọi lockfile (api, web, dispatcher, worker-convert, migrations, tests, requirements.txt pdf-worker) = **0**. Không nâng cấp gói nào (đúng yêu cầu “có lỗ hổng mới cập nhật, không ảnh hưởng giao diện”). Chỉ có bản vá nhỏ chưa cần: next 16.3.5→16.3.7 (ghi chú phát hành không có sửa bảo mật), next-intl 4.14.5→4.14.7, postcss 8.5.23→8.5.28.
+- **Trivy:** bản winget 0.74.0 không có `trivy.exe` (thư mục chỉ có contrib/README) → dùng image Docker `aquasec/trivy:latest` (cache volume `trivy-cache`). `fs` (vuln+misconfig) và `image` cho 8 image của stack.
+- **Phát hiện & đã sửa:** (1) `nginx:1.27.4-alpine` cũ → 46 CVE HIGH/CRITICAL đều có bản vá (OpenSSL, libexpat, libxml2, libpng, zlib…) → nâng `nginx:1.30.5-alpine` + `apk upgrade`: proxy/public-edge còn **0** lỗ; (2) 7–10 CVE `node-pkg` nằm trong **npm đi kèm image node** (tar, brace-expansion, picomatch…), không phải dependency app → gỡ npm khỏi image cuối api/web/dispatcher/worker-convert/migrate; (3) `infra/migrations/Dockerfile` chạy root (DS-0002 HIGH) → `USER node`.
+- **Còn lại (không sửa được từ phía dự án):** 56 CVE HIGH/CRITICAL trên image Debian 12 (node) và 44 trên Debian 13 (pdf-worker) — **chưa có bản vá từ Debian** (util-linux, perl-base, zlib1g, libtinfo…). Cần theo dõi khi Debian phát hành bản vá; đã giảm rủi ro nhờ `cap_drop`, `read_only` (pdf-worker), mạng `sandbox` không Internet. Misconfig LOW “thiếu HEALTHCHECK” trong Dockerfile là dương tính giả (healthcheck khai báo ở docker-compose).
+- Hồi quy sau đổi image: network_planes, api, p2, p3, pdf_media, f16, p5, sec_audit, tenant_isolation, corpus (56), cookie, lật trang (64) — đều xanh.

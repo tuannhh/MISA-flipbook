@@ -18,7 +18,7 @@ import { XDialog } from "@/components/xds/XDialog";
 import { XIcon } from "@/components/xds/icons/XIcon";
 import { useToast } from "@/components/xds/XToast";
 import { formatBytes } from "@/lib/format";
-import { publicEmbedCode, publicReaderPath } from "@/lib/public-reader-url";
+import { publicEmbedCode, publicOrigin, publicReaderPath } from "@/lib/public-reader-url";
 
 type BookWithCover = Book & { cover_asset_id: string | null };
 
@@ -31,8 +31,7 @@ const GA4_ID_RE = /^G-[A-Za-z0-9]{4,20}$/;
 // F09: iframe responsive, khong co kich thuoc co dinh - xem chu thich goc cua
 // ham nay truoc khi sua (giu nguyen logic tu P3, chi doi UI xung quanh).
 function embedCode(permalink: string): string {
-  const origin = typeof window !== "undefined" ? window.location.origin : "";
-  return publicEmbedCode(permalink, origin);
+  return publicEmbedCode(permalink, publicOrigin());
 }
 
 export default function BookDetailPage() {
@@ -402,8 +401,8 @@ export default function BookDetailPage() {
       {publicUrl && (
         <p className="mt-2 truncate text-[13px]">
           {t("publicLinkLabel")}:{" "}
-          <a href={publicUrl} target="_blank" rel="noreferrer" className="text-[var(--xds-brand-600)] hover:underline">
-            {typeof window !== "undefined" ? window.location.origin : ""}
+          <a href={publicOrigin() + publicUrl} target="_blank" rel="noreferrer" className="text-[var(--xds-brand-600)] hover:underline">
+            {publicOrigin()}
             {publicUrl}
           </a>
         </p>

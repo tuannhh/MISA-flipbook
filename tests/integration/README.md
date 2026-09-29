@@ -89,3 +89,7 @@ node reader_flip.e2e.test.js      # ~15 phut: lat trang tren Chrome that (FLIP_Q
   zoom + pan, reduced-motion, sach 1..5 trang. Anh chup khi loi o `%TEMP%/misa-flip-shots`.
 - Ha tang dung chung: `lib/corpus.js` (tao tenant/creator, upload, cache sach da publish o `%TEMP%`),
   `corpus_fidelity.py` (nguon su that doc lap; can `pypdf pypdfium2 pillow numpy`).
+
+## Mat phang mang (yeu cau an ninh MISA)
+
+`network_planes.test.js`: domain public (:8081) chi doc sach da publish, khong co API noi bo/ghi/upload; upload tu choi shell/PHP/ELF/PE/docx/polyglot; guard IP trong API. Them `NETPLANE_RECONFIGURE=1` de tao lai proxy+api voi CIDR gia (can docker). Chay: `API_BASE_URL=http://127.0.0.1:8080/api SEED_ADMIN_PASSWORD=... node network_planes.test.js`. Xem `docs/network-planes.md`.

@@ -301,7 +301,12 @@ async function main() {
   fs.closeSync(fd);
   fs.writeFileSync(trunc, head);
   const tr = await convertVariant(creds, trunc, "Truncated");
-  check("upload file cat cut duoc nhan (201) roi job ket thuc 'failed' (khong 'done', khong treo)", tr.up.status === 201 && tr.job && tr.job.state === "failed", tr.job || tr.up);
+  // Hop dong moi (siet upload an ninh MISA): file cat cut khong co %%EOF cuoi -> tu choi NGAY luc upload.
+  check("file cat cut (thieu %%EOF) bi tu choi som luc upload (400), khong vao kho", tr.up.status === 400, tr.up);
+  const junkBody = path.join(TMP, "junk-body.pdf");
+  fs.writeFileSync(junkBody, Buffer.concat([Buffer.from("%PDF-1.4\n"), Buffer.from(Array.from({ length: 80000 }, (_, i) => (i * 131 + 7) % 251)), Buffer.from("\n%%EOF\n")]));
+  const jb = await convertVariant(creds, junkBody, "JunkBody");
+  check("file than hong nhung du chu ky + %%EOF duoc nhan (201) roi job ket thuc 'failed' (khong 'done', khong treo)", jb.up.status === 201 && jb.job && jb.job.state === "failed", jb.job || jb.up);
   const after = await api("GET", "/public/books/" + st.permalink);
   check("loi convert sach khac KHONG anh huong sach corpus dang publish", after.status === 200 && after.data.pages.length === info.pageCount, after.status);
 

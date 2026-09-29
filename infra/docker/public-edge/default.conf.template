@@ -1,0 +1,92 @@
+# Mat phang CONG KHAI (domain public) - chi doc sach DA PUBLISH.
+# Nguyen tac: allowlist duong dan + allowlist method (khong bao gio blocklist).
+# Khong co duong nao toi login / dashboard / admin / upload / API quan tri.
+
+server {
+    listen 8081;
+    server_name _;
+    server_tokens off;
+    # Khong co upload tren mat phang nay: body nho; POST chi cho events / verify-password.
+    client_max_body_size 16k;
+    client_body_timeout 10s;
+    client_header_timeout 10s;
+    send_timeout 60s;
+
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    # /embed la tinh nang san pham nen KHONG dat X-Frame-Options.
+
+    # 1) Chan cac trang noi bo TRUOC khi khop route dong /<permalink> cua Next.
+    location ~ ^/(login|dashboard|admin)(/|$) { return 404; }
+    location = / { return 404; }
+
+    location = /health {
+        access_log off;
+        proxy_http_version 1.1;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_pass ${PUBLIC_EDGE_API_UPSTREAM};
+        rewrite ^ /health break;
+    }
+
+    # 2) API: chi /api/public/books/**. POST chi cho 2 endpoint an toan, con lai chi GET/HEAD.
+    location ~ ^/api/public/books/[A-Za-z0-9_-]+/(events|verify-password)$ {
+        limit_except POST OPTIONS { deny all; }
+        limit_req zone=pub_pw burst=10 nodelay;
+        rewrite ^/api/(.*)$ /$1 break;
+        proxy_http_version 1.1;
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 30s;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        # Ghi de XFF: API chi tin dung 1 hop nay (IP that cua khach) - dung cho rate limit va guard.
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_pass ${PUBLIC_EDGE_API_UPSTREAM};
+    }
+
+    location ~ ^/api/public/books/[A-Za-z0-9_-]+(/(metadata|preview-image|background|download|assets/[A-Za-z0-9_-]+))?$ {
+        limit_except GET HEAD { deny all; }
+        limit_req zone=pub_api burst=120 nodelay;
+        rewrite ^/api/(.*)$ /$1 break;
+        proxy_http_version 1.1;
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 130s;
+        proxy_buffering off;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_pass ${PUBLIC_EDGE_API_UPSTREAM};
+    }
+
+    # Moi duong /api/ con lai (auth, books, admin, jobs, me...) -> khong ton tai tren mat phang nay.
+    # (regex, dat SAU cac regex /api/public o tren va TRUOC route dong /<permalink> cua Next)
+    location ~ ^/api(/|$) { return 404; }
+
+    # 3) Trinh doc (Next.js): chi GET/HEAD.
+    location ^~ /_next/ {
+        limit_except GET HEAD { deny all; }
+        limit_req zone=pub_web burst=200 nodelay;
+        include /etc/nginx/conf.d/web_proxy.inc;
+    }
+    location ^~ /fonts/ {
+        limit_except GET HEAD { deny all; }
+        include /etc/nginx/conf.d/web_proxy.inc;
+    }
+    location ^~ /brand/ {
+        limit_except GET HEAD { deny all; }
+        include /etc/nginx/conf.d/web_proxy.inc;
+    }
+    # /<permalink>, /<permalink>/embed, /read/<permalink>, /read/<permalink>/embed
+    location ~ ^/(read/)?[A-Za-z0-9_-]+(/embed)?/?$ {
+        limit_except GET HEAD { deny all; }
+        limit_req zone=pub_web burst=60 nodelay;
+        include /etc/nginx/conf.d/web_proxy.inc;
+    }
+
+    # 4) Mac dinh: tu choi.
+    location / { return 404; }
+}
