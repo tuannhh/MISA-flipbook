@@ -63,3 +63,29 @@ song lai, hoan tat dung (khong mat, khong trung du lieu).
   chua co test tu dong gia lap job ket qua STUCK_JOB_TIMEOUT_MINUTES that (15 phut mac dinh,
   qua lau de chay trong test tu dong o day).
 - Mat khau bao ve sach cong khai (book_settings.password_hash) — cho P3.
+
+## Test corpus PDF that: convert + lat trang (24/09/2026 tro di)
+
+Hai test dung **PDF that** (mac dinh `D:/test flipbook/Sách kỷ yếu 70 năm thành lập Cục QLGSKTKT.pdf`,
+190 MiB / 140 trang, doi bang `CORPUS_PDF=...`). Khong co file -> tu SKIP (exit 0), nen CI khong hong.
+Chay qua reverse proxy cua stack Docker (port 8080):
+
+```bash
+cd tests/integration && npm install      # them playwright-core (dung Chrome cai san, khong tai trinh duyet)
+export API_BASE_URL=http://127.0.0.1:8080/api WEB_BASE_URL=http://127.0.0.1:8080
+export SEED_ADMIN_PASSWORD='<mat khau admin dev>'
+node corpus_real_pdf.test.js      # ~2 phut: convert + doi chung noi dung
+node reader_flip.e2e.test.js      # ~15 phut: lat trang tren Chrome that (FLIP_QUICK=1 -> ~4 phut)
+```
+
+- `corpus_real_pdf.test.js` (55 assertion): upload stream file 190MB, tien trinh job khong lui, so trang /
+  kich thuoc trang khop PDF goc (doc lap bang pypdf + pypdfium2, KHONG tin manifest cua pipeline), tai het 280
+  anh (magic bytes WebP/JPEG, kich thuoc that, Cache-Control), **so noi dung tung trang voi ban render tham
+  chieu** (MAE, phat hien trang trang), Range 206, mat khau/token, cach ly tenant, cac bien the 1..5 trang,
+  trang xoay/ngang hon hop, file cat cut -> job `failed` co kiem soat.
+- `reader_flip.e2e.test.js`: sau **moi** lan lat kiem 6 bat bien (nhan ↔ anh dang hien ↔ tien trinh ↔ nut
+  Truoc/Sau ↔ anh da tai ↔ khong loi console); duyet tron 140 trang hai chieu (desktop + mobile cam ung),
+  phim, nhay trang qua hop thoai, deep-link `?page=N`, bam nhanh, keo chuot, vuot cam ung (CDP), resize/xoay,
+  zoom + pan, reduced-motion, sach 1..5 trang. Anh chup khi loi o `%TEMP%/misa-flip-shots`.
+- Ha tang dung chung: `lib/corpus.js` (tao tenant/creator, upload, cache sach da publish o `%TEMP%`),
+  `corpus_fidelity.py` (nguon su that doc lap; can `pypdf pypdfium2 pillow numpy`).

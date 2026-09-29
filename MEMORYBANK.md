@@ -1980,3 +1980,42 @@ xem: `http://127.0.0.1:8080/read/ky-yeu-70-nam-cuc-qlgskt-u0jrhvvy` (dữ liệu
 **Giới hạn còn lại (thật, ngoài tầm máy dev):** soak dài hạn nhiều giờ, device matrix thiết bị vật lý
 thật, PDF có video/đa codec, TLS/CDN/object-storage/HA production. `pip-audit` pdf-worker chưa cài lại.
 Không gắn stable tag khi chưa có xác nhận người dùng theo HANDOFF.md.
+
+## Claude — test corpus PDF thật (convert + lật trang) và sửa 4 lỗi reader (29/09/2026)
+
+**Đối chiếu GitHub:** `main` local == `origin/main` tại `2923733` (ahead 0 / behind 0) trước khi bắt đầu.
+Corpus dùng: `D:/test flipbook/Sách kỷ yếu 70 năm thành lập Cục QLGSKTKT.pdf` (140 trang; đổi bằng env `CORPUS_PDF`).
+
+**Test mới (tests/integration, chạy qua stack Docker cổng 8080):**
+- `corpus_real_pdf.test.js` — 8 nhóm: upload PDF thật → convert → publish → Range 206, password+token, tenant isolation,
+  PDF cắt cụt → job `failed`, biến thể (1–5 trang, /Rotate 90/180, landscape MediaBox+CropBox). **55 PASS / 0 FAIL.**
+  `corpus_fidelity.py` đo MAE/aspect so với pypdfium2. Helper dùng chung ở `lib/corpus.js`.
+- `reader_flip.e2e.test.js` — Playwright + Chrome hệ thống: duyệt tuần tự 140 trang (desktop 70 lần lật, mobile 139+139),
+  nhảy trang, deep-link `?page=`, bấm nhanh, resize/xoay màn hình, zoom, reduced-motion, sách 1–5 trang, vuốt cảm ứng (CDP),
+  kéo chuột. Bất biến: nhãn == ảnh đang thấy, ảnh đã tải, progress đúng, Prev/Next đúng, 1/2 trang đúng, không lỗi console/HTTP≥400.
+  Chạy đầy đủ: 51 PASS / 2 FAIL (hai FAIL là D8 cũ, đã viết lại); chế độ `FLIP_QUICK=1` sau khi sửa D8: **53 PASS / 0 FAIL**.
+  Chạy: `node reader_flip.e2e.test.js` (mất ~10–15 phút; `FLIP_QUICK=1` để nhanh). Cần Chrome + `playwright-core`.
+
+**4 lỗi thật ở `apps/web/src/components/FlipBook.tsx` (đã sửa):**
+- **A** Nhảy trang/“Sau” hỏng, ảnh nhân đôi `[2,1,3]`: `react-pageflip` chạy `updateFromHtml()` (huỷ + dựng lại toàn bộ trang)
+  mỗi khi `children` đổi identity → reset animation đang lật. Sửa: children memo hoá, ảnh nạp theo `ReaderWindowContext`
+  (cửa sổ quanh trang hiện tại) thay vì đổi props; `goToPage` preload ảnh đích rồi mới `flip()`.
+- **B** `?page=` lẻ / sau resize lệch nhãn: thêm `spreadStartIndex` (spread bắt đầu ở index lẻ khi có bìa).
+- **C** “Sau” chết ở spread cuối của sách số trang lẻ: tính `lastVisibleIndex` thay vì `currentIndex`.
+- **D** Prev/Next không bấm được khi đang zoom: `setPointerCapture` chặn `click` của nút con → bỏ qua khi target là button/a/input.
+- **E** (phát hiện nhờ test fullscreen D13) Dialog/toast/dropdown vô hình khi đang toàn màn hình: `XDialog`/`XToast`/`XDropdownMenu` portal vào `document.body`, mà Fullscreen API chỉ hiển thị cây con của phần tử fullscreen (hộp thoại “nhảy trang” không hiện). Sửa: `components/xds/portalTarget.ts` → portal vào `document.fullscreenElement ?? document.body`.
+
+**Không phải lỗi (đã chẩn đoán, ghi để khỏi điều tra lại):**
+- Kéo chuột từ góc trang: `.nav-zone` (25% mỗi bên, có từ trước) phủ hai góc nên desktop không kéo từ góc được — thiết kế; bấm vùng đó lật trang.
+  Kéo từ giữa sân khấu để lại phần tử gấp ngoài tầm nhìn, nhãn vẫn đúng và bấm Sau/Trước phục hồi ngay (cosmetic, do thư viện).
+- Vuốt cảm ứng chỉ nhận khi bắt đầu ngoài `.nav-zone` và hoàn tất trong 250ms (`swipeTimeout` của page-flip) — test đã chỉnh điểm bắt đầu.
+
+**Hồi quy trên stack đã rebuild web (tất cả xanh):** api_e2e 14/14, p2 22/22, p3 35/35, pdf_media 16/16, f16 12/12,
+p5_uat 21/21, sec_audit 14/14, cookie_session 15/15 (`API_BASE_URL` không có `/api`), tenant_isolation 13/13
+(cần `DATABASE_URL` + `APP_USER_URL` tới 127.0.0.1:5432 cho f16/sec_audit/tenant_isolation).
+
+**Fullscreen (D13, 9 check):** vào/ra bằng nút, giữ trang, lật Sau/phím mũi tên, nhảy trang bằng dialog, đồng bộ nút khi thoát bằng `exitFullscreen`/Esc — PASS (chế độ nhanh 62/62). Iframe nhúng (D14, 2 check, đã vào suite, dùng browser riêng với cờ `--disable-features=LocalNetworkAccessChecks` vì Chrome chặn host giả → localhost): có `allowfullscreen` (mã nhúng sinh sẵn) thì vào fullscreen, lật trang, thoát đều đúng; thiếu thì trình duyệt từ chối, nút giữ nguyên, không hỏng. Chế độ nhanh: 64/64.
+
+**Còn mở:** chưa có device matrix thiết bị thật (cảm ứng thật, iOS Safari); test corpus/flip
+chưa đưa vào CI (cần Chrome + python deps; dùng `tests/fixtures/pdf/sample_stress_150pages.pdf` làm `CORPUS_PDF`) — cần hỏi trước khi sửa CI.
+Chưa commit/push các thay đổi này (đang chờ người dùng).

@@ -1,6 +1,7 @@
 "use client";
 import { createContext, ReactNode, useCallback, useContext, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
+import { portalTarget } from "./portalTarget";
 import { XIcon } from "./icons/XIcon";
 
 // Port truc tiep tu ui/components/XToast.vue - goc tren phai, toi da 3, tu dong
@@ -73,7 +74,7 @@ export function XToastProvider({ children }: { children: ReactNode }) {
               </div>
             ))}
           </div>,
-          document.body
+          portalTarget()
         )}
     </ToastContext.Provider>
   );

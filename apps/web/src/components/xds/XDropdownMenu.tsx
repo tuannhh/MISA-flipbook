@@ -1,6 +1,7 @@
 "use client";
 import { ReactNode, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { portalTarget } from "./portalTarget";
 import { XIcon } from "./icons/XIcon";
 import type { IconName } from "./icons/paths";
 
@@ -112,7 +113,7 @@ export function XDropdownMenu({
               )
             )}
           </div>,
-          document.body
+          portalTarget()
         )}
     </>
   );

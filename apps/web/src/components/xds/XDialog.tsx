@@ -1,6 +1,7 @@
 "use client";
 import { ReactNode, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
+import { portalTarget } from "./portalTarget";
 import { XIcon } from "./icons/XIcon";
 
 // Port truc tiep tu ui/components/XDialog.vue. Khong dung <Transition>/Teleport
@@ -146,6 +147,6 @@ export function XDialog({
         </div>
       </div>
     </div>,
-    document.body
+    portalTarget()
   );
 }

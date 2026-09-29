@@ -1,8 +1,11 @@
 "use client";
 import {
+  createContext,
   forwardRef,
   useCallback,
+  useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ChangeEvent as ReactChangeEvent,
@@ -69,24 +72,51 @@ function computeImageBox(ownAspect: number, containerAspect: number) {
   return { left: (1 - width) / 2, top: 0, width, height: 1 };
 }
 
+// Chi so (0-based) cua trang TRAI trong spread chua `index`, voi showCover: bia dung mot minh
+// ([0]) roi tung cap [1,2], [3,4]... Deep-link ?page=, resize, doi che do 1<->2 trang co the cho
+// mot chi so CHAN (thuoc ve cap [le, chan]); StPageFlip tu dua ve dau spread nhung KHONG phat
+// su kien "flip" nen phai tu chuan hoa, neu khong nhan/nut Truoc-Sau lech voi anh dang hien.
+function spreadStartIndex(index: number) {
+  if (index <= 0) return 0;
+  return index % 2 === 1 ? index : index - 1;
+}
+
+// Cua so tai anh lazy + trang dang hien duoc dua qua Context (khong qua props) de mang
+// `children` cua HTMLFlipBook on dinh: react-pageflip goi updateFromHtml() (huy + dung lai toan
+// bo trang, reset ve trang hien tai) moi khi `children` doi tham chieu - neu doi giua luc
+// dang lat thi hoat anh bi reset (nhay trang khong den dich, anh chong lan, nut Sau "chet").
+interface ReaderWindow {
+  first: number;
+  last: number;
+  shown: number;
+  spread: boolean;
+}
+const ReaderWindowContext = createContext<ReaderWindow>({ first: 0, last: -1, shown: 0, spread: false });
+
 interface PageProps {
-  imageUrl: string | null;
+  index: number;
+  pageNumber: number;
+  total: number;
+  assetId: string | null;
   assetUrl: (assetId: string) => string;
   rotation?: number;
-  alt: string;
   widthPt: number;
   heightPt: number;
   pageAspect: number;
   links?: ReaderPage["links"];
   media?: ReaderPage["media"];
-  active?: boolean;
   onGoToPage?: (pageNumber: number) => void;
 }
 
 const Page = forwardRef<HTMLDivElement, PageProps>(function Page(
-  { imageUrl, assetUrl, rotation = 0, alt, widthPt, heightPt, pageAspect, links, media, active = false, onGoToPage },
+  { index, pageNumber, total, assetId, assetUrl, rotation = 0, widthPt, heightPt, pageAspect, links, media, onGoToPage },
   ref
 ) {
+  const t = useTranslations("reader");
+  const win = useContext(ReaderWindowContext);
+  const imageUrl = assetId && index >= win.first && index <= win.last ? assetUrl(assetId) : null;
+  const active = index === win.shown || (win.spread && win.shown > 0 && index === win.shown + 1);
+  const alt = t("pageLabelSingle", { page: pageNumber, total });
   const mediaRefs = useRef<Array<HTMLMediaElement | null>>([]);
   // PageFlip keeps some hidden page nodes mounted. Media must never continue
   // playing after its page is no longer visible, and we never autoplay it.
@@ -280,16 +310,26 @@ export function FlipBook({
   // Mobile/tablet are deliberately always one page, including landscape. A wide
   // desktop with a mouse/trackpad receives a two-page spread.
   const isSpreadCapable = !coarsePointer && containerWidth >= SPREAD_MIN_WIDTH && pages.length > 2;
+  // Chi so trang TRAI dang hien (da chuan hoa ve dau spread khi o che do 2 trang).
+  const shownIndex = isSpreadCapable ? spreadStartIndex(currentIndex) : currentIndex;
   // Keep the network window small: a 500-page catalogue no longer starts 500 image
   // downloads. requestedIndex preloads a direct jump before PageFlip reaches it.
-  const loadCenter = requestedIndex ?? currentIndex;
+  const loadCenter = requestedIndex ?? shownIndex;
   const firstLoadedIndex = Math.max(0, loadCenter - (isSpreadCapable ? 3 : 2));
   const lastLoadedIndex = Math.min(pages.length - 1, loadCenter + (isSpreadCapable ? 5 : 3));
-  const pageImg = useCallback(
-    (p: ReaderPage, index: number) =>
-      index >= firstLoadedIndex && index <= lastLoadedIndex && p.imageAssetId ? imageUrl(p.imageAssetId) : null,
-    [firstLoadedIndex, imageUrl, lastLoadedIndex]
+  const readerWindow = useMemo<ReaderWindow>(
+    () => ({ first: firstLoadedIndex, last: lastLoadedIndex, shown: shownIndex, spread: isSpreadCapable }),
+    [firstLoadedIndex, lastLoadedIndex, shownIndex, isSpreadCapable]
   );
+  // Trang goi qua ref de khong lam doi tham chieu `children` (xem ReaderWindowContext).
+  const imageUrlRef = useRef(imageUrl);
+  imageUrlRef.current = imageUrl;
+  const assetUrl = useCallback((assetId: string) => imageUrlRef.current(assetId), []);
+  const shownIndexRef = useRef(shownIndex);
+  shownIndexRef.current = shownIndex;
+  const spreadRef = useRef(isSpreadCapable);
+  spreadRef.current = isSpreadCapable;
+  const jumpToken = useRef(0);
 
   // BUG THAT phat hien 2026-09-17 (nguoi dung bao qua Chrome DevTools that o
   // iPhone 16 Pro Max 440px): page-flip's "stretch" size KHONG chi dua vao prop
@@ -317,21 +357,47 @@ export function FlipBook({
   const flippingTime = simple ? 1 : 700;
 
   const goNext = useCallback(() => {
-    setRequestedIndex((index) => Math.min(pages.length - 1, (index ?? currentIndex) + 1));
+    jumpToken.current += 1;
     bookRef.current?.pageFlip().flipNext();
-  }, [currentIndex, pages.length]);
+  }, []);
   const goPrev = useCallback(() => {
-    setRequestedIndex((index) => Math.max(0, (index ?? currentIndex) - 1));
+    jumpToken.current += 1;
     bookRef.current?.pageFlip().flipPrev();
-  }, [currentIndex]);
+  }, []);
   // F10 Muc A: link noi bo (internal_goto) - target la so trang 1-based (BE),
   // StPageFlip dung index 0-based khop voi thu tu pages[] truyen vao children.
+  // Nhay xa: nap truoc anh trang dich (toi da ~1.5s) roi moi flip() de khong lat ra o trong;
+  // KHONG doi state nao lam doi `children` ngay truoc flip (xem ReaderWindowContext).
   const goToPage = useCallback(
     (pageNumber: number) => {
       const index = pages.findIndex((page) => page.page === pageNumber);
       if (index < 0) return;
-      setRequestedIndex(index);
-      bookRef.current?.pageFlip().flip(index);
+      const target = spreadRef.current ? spreadStartIndex(index) : index;
+      if (target === shownIndexRef.current) return;
+      const token = (jumpToken.current += 1);
+      setRequestedIndex(target);
+      const wanted = spreadRef.current && target > 0 ? [target, target + 1] : [target];
+      const loads = wanted
+        .map((i) => pages[i]?.imageAssetId)
+        .filter((id): id is string => !!id)
+        .map(
+          (id) =>
+            new Promise<void>((resolve) => {
+              const img = new Image();
+              img.onload = () => resolve();
+              img.onerror = () => resolve();
+              img.src = imageUrlRef.current(id);
+            })
+        );
+      const timeout = new Promise<void>((resolve) => setTimeout(resolve, 1500));
+      void Promise.race([Promise.all(loads), timeout]).then(() => {
+        if (token !== jumpToken.current) return;
+        bookRef.current?.pageFlip().flip(target);
+        // Neu thu vien khong phat "flip" (loi bat thuong) van tha cua so tai ve trang dang hien.
+        setTimeout(() => {
+          if (token === jumpToken.current) setRequestedIndex(null);
+        }, 3000);
+      });
     },
     [pages]
   );
@@ -428,6 +494,9 @@ export function FlipBook({
   const onStagePointerDown = useCallback(
     (e: ReactPointerEvent<HTMLDivElement>) => {
       if (!isZoomed) return;
+      // setPointerCapture chuyen huong luon su kien `click` ve stage => nut Truoc/Sau, link
+      // trong trang va cac control khac se khong bao gio nhan duoc click khi dang zoom.
+      if ((e.target as HTMLElement).closest("button, a, input, audio, video")) return;
       panDrag.current = { startX: e.clientX, startY: e.clientY, startPanX: pan.x, startPanY: pan.y };
       e.currentTarget.setPointerCapture(e.pointerId);
     },
@@ -515,14 +584,15 @@ export function FlipBook({
     }
   }
 
-  const canGoPrev = currentIndex > 0;
-  const canGoNext = currentIndex < pages.length - 1;
-  const currentPage = pages[currentIndex] ?? pages[0];
-  const rightPage = isSpreadCapable ? pages[currentIndex + 1] : null;
-  const pageLabel =
-    isSpreadCapable && rightPage && currentIndex > 0 && currentIndex < pages.length - 1
-      ? t("pageLabelSpread", { from: currentPage?.page ?? 0, to: rightPage.page, total: pages.length })
-      : t("pageLabelSingle", { page: currentPage?.page ?? "-", total: pages.length });
+  const currentPage = pages[shownIndex] ?? pages[0];
+  const rightPage = isSpreadCapable && shownIndex > 0 ? pages[shownIndex + 1] : undefined;
+  const lastVisibleIndex = rightPage ? shownIndex + 1 : shownIndex;
+  const canGoPrev = shownIndex > 0;
+  // Sach so trang le: spread cuoi [le, chan] la trang cuoi cung - khong con gi de lat toi.
+  const canGoNext = lastVisibleIndex < pages.length - 1;
+  const pageLabel = rightPage
+    ? t("pageLabelSpread", { from: currentPage?.page ?? 0, to: rightPage.page, total: pages.length })
+    : t("pageLabelSingle", { page: currentPage?.page ?? "-", total: pages.length });
 
   // Thanh tien trinh doc: tinh theo trang PHAI cung (spread) khi co, de "100%" khop
   // dung luc nguoi dung thay het trang cuoi, khong dung lai o trang trai cua spread cuoi.
@@ -545,6 +615,29 @@ export function FlipBook({
     goToPage(target);
     setNavigatorOpen(false);
   }
+
+  // Mang children ON DINH (chi doi khi doi sach/kich thuoc trang/ham nhay) - xem ReaderWindowContext.
+  const pageElements = useMemo(
+    () =>
+      pages.map((p, index) => (
+        <Page
+          key={p.page}
+          index={index}
+          pageNumber={p.page}
+          total={pages.length}
+          assetId={p.imageAssetId ?? null}
+          assetUrl={assetUrl}
+          rotation={p.rotation}
+          widthPt={p.widthPt}
+          heightPt={p.heightPt}
+          pageAspect={pageAspect}
+          links={p.links}
+          media={p.media}
+          onGoToPage={goToPage}
+        />
+      )),
+    [pages, assetUrl, pageAspect, goToPage]
+  );
 
   return (
     <div className="reader" style={readerStyle} ref={readerRootRef}>
@@ -674,6 +767,7 @@ export function FlipBook({
                 <XIcon name="chevron-right" size={28} />
               </button>
             )}
+            <ReaderWindowContext.Provider value={readerWindow}>
             <HTMLFlipBook
               // StPageFlip khong tu doi portrait/landscape khi prop usePortrait doi sau
               // khi da mount (chi doc luc khoi tao/resize noi bo) - remount hoan toan
@@ -703,7 +797,7 @@ export function FlipBook({
               showPageCorners
               disableFlipByClick={false}
               flippingTime={flippingTime}
-              startPage={currentIndex}
+              startPage={shownIndex}
               startZIndex={0}
               autoSize
               drawShadow
@@ -712,23 +806,9 @@ export function FlipBook({
               style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, transformOrigin: "center center" }}
               onFlip={onFlip}
             >
-              {pages.map((p, index) => (
-                <Page
-                  key={p.page}
-                  imageUrl={pageImg(p, index)}
-                  assetUrl={imageUrl}
-                  rotation={p.rotation}
-                  widthPt={p.widthPt}
-                  heightPt={p.heightPt}
-                  pageAspect={pageAspect}
-                  links={p.links}
-                  media={p.media}
-                  active={index === currentIndex || (isSpreadCapable && index === currentIndex + 1)}
-                  onGoToPage={goToPage}
-                  alt={t("pageLabelSingle", { page: p.page, total: pages.length })}
-                />
-              ))}
+              {pageElements}
             </HTMLFlipBook>
+            </ReaderWindowContext.Provider>
           </>
         )}
       </div>
