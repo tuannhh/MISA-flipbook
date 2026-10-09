@@ -272,6 +272,7 @@ export function FlipBook({
   const containerRef = useRef<HTMLDivElement>(null);
   const bookRef = useRef<{ pageFlip(): PageFlipApi } | null>(null);
   const [containerWidth, setContainerWidth] = useState(0);
+  const [containerHeight, setContainerHeight] = useState(0);
   const [currentIndex, setCurrentIndex] = useState(() => {
     const initialIndex = initialPage === undefined ? 0 : pages.findIndex((page) => page.page === initialPage);
     return initialIndex >= 0 ? initialIndex : 0;
@@ -288,7 +289,10 @@ export function FlipBook({
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
-    const update = () => setContainerWidth(el.clientWidth);
+    const update = () => {
+      setContainerWidth(el.clientWidth);
+      setContainerHeight(el.clientHeight);
+    };
     update();
     const ro = new ResizeObserver(update);
     ro.observe(el);
@@ -309,7 +313,13 @@ export function FlipBook({
 
   // Mobile/tablet are deliberately always one page, including landscape. A wide
   // desktop with a mouse/trackpad receives a two-page spread.
-  const isSpreadCapable = !coarsePointer && containerWidth >= SPREAD_MIN_WIDTH && pages.length > 2;
+  // Khung thap va rong (iframe nhung 16:9 trong cot bai viet ~780px) cung mo spread: sach
+  // da bi gioi han theo chieu cao (xem bookWidth) nen 1 trang don cung khong to hon trang
+  // trong spread, chi phi khoang trong hai ben. Nguong 1.6 = moi trang spread >= ~80%
+  // kich thuoc trang don.
+  const wideStage = containerHeight > 0 && containerWidth >= 1.6 * containerHeight * pageAspect;
+  const isSpreadCapable =
+    !coarsePointer && (containerWidth >= SPREAD_MIN_WIDTH || (containerWidth >= 480 && wideStage)) && pages.length > 2;
   // Chi so trang TRAI dang hien (da chuan hoa ve dau spread khi o che do 2 trang).
   const shownIndex = isSpreadCapable ? spreadStartIndex(currentIndex) : currentIndex;
   // Keep the network window small: a 500-page catalogue no longer starts 500 image
@@ -348,8 +358,19 @@ export function FlipBook({
   // cua page-flip dong bang tu luc khoi tao, doi sau khong co tac dung - da biet tu
   // truoc). Da test that qua Claude Browser o nhieu be rong (320/375/414/440/768/900)
   // truoc khi ket luan sua xong, xem MEMORYBANK.md.
+  //
+  // Khung nhung 16:9 (iframe /embed, vd 960x540) bi cat tren/duoi: autoSize cua
+  // page-flip dat chieu cao sach = padding-bottom % theo CHIEU NGANG (doc thang
+  // page-flip.module.js), khong xet chieu cao stage => khung thap hon ~0.7 x ngang la
+  // tran. Sua: tu gioi han be rong sach theo chieu cao stage (kieu object-fit:contain)
+  // qua the boc .flipbook-fit; sach nho lai va can giua, nen/thanh cong cu van rong
+  // full khung nhu khi fullscreen.
+  const bookAspect = isSpreadCapable ? 2 * pageAspect : pageAspect;
+  const bookWidth =
+    containerHeight > 0 ? Math.min(containerWidth, Math.floor(containerHeight * bookAspect)) : containerWidth;
   const WIDTH_BUCKET = 20;
-  const widthBucket = Math.max(1, Math.round(containerWidth / WIDTH_BUCKET));
+  // Lam tron XUONG: lam tron len co the vuot khung vai px (sach tran mep/bi cat).
+  const widthBucket = Math.max(1, Math.floor(bookWidth / WIDTH_BUCKET));
   const portraitMinWidth = Math.max(200, widthBucket * WIDTH_BUCKET);
   const minWidth = isSpreadCapable ? 200 : portraitMinWidth;
   const minHeight = Math.round(minWidth / pageAspect);
@@ -768,6 +789,7 @@ export function FlipBook({
               </button>
             )}
             <ReaderWindowContext.Provider value={readerWindow}>
+            <div className="flipbook-fit" style={{ width: widthBucket * WIDTH_BUCKET }}>
             <HTMLFlipBook
               // StPageFlip khong tu doi portrait/landscape khi prop usePortrait doi sau
               // khi da mount (chi doc luc khoi tao/resize noi bo) - remount hoan toan
@@ -778,7 +800,9 @@ export function FlipBook({
               // prop sau do KHONG co tac dung - phai remount khi isZoomed doi trang thai
               // (bat/tat zoom) de tat that su keo-de-lat trang cua thu vien trong luc
               // pan, tranh xung dot voi pan tu viet (F17).
-              key={`${pages.length}-${isSpreadCapable}-${isZoomed}-${isSpreadCapable ? 0 : widthBucket}`}
+              // widthBucket cung remount ca o che do spread: page-flip chi tinh lai kich thuoc
+              // khi window resize, khong biet .flipbook-fit vua doi be rong theo chieu cao.
+              key={`${pages.length}-${isSpreadCapable}-${isZoomed}-${widthBucket}`}
               ref={bookRef as never}
               width={width}
               height={height}
@@ -808,6 +832,7 @@ export function FlipBook({
             >
               {pageElements}
             </HTMLFlipBook>
+            </div>
             </ReaderWindowContext.Provider>
           </>
         )}
